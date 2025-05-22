@@ -1,4 +1,4 @@
-use bevy::math::primitives::{Cuboid, Cylinder};
+use bevy::math::primitives::{Cuboid, Cylinder, Sphere};
 use bevy::prelude::*;
 use serde::Deserialize;
 use std::fs::File;
@@ -47,7 +47,12 @@ fn main() {
         .run();
 }
 
-fn setup(mut commands: Commands) {
+fn setup(
+    mut commands: Commands,
+    asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
     let file = File::open("assets/simulation.json").expect("File not found");
     let reader = BufReader::new(file);
     let data: GridData = serde_json::from_reader(reader).expect("Invalid JSON");
@@ -61,16 +66,36 @@ fn setup(mut commands: Commands) {
 
     commands.spawn((
         Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 200.0, 300.0)
-                .looking_at(Vec3::new(0.0, 0.0, 0.0), Vec3::Y),
+            transform: Transform::from_xyz(0.0, 250.0, 400.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
         },
         MainCamera,
     ));
 
-    commands.spawn(PointLightBundle {
-        transform: Transform::from_xyz(200.0, 400.0, 200.0),
+    commands.spawn(DirectionalLightBundle {
+        directional_light: DirectionalLight {
+            shadows_enabled: true,
+            illuminance: 10000.0,
+            ..default()
+        },
+        transform: Transform::from_xyz(0.0, 200.0, 100.0).looking_at(Vec3::ZERO, Vec3::Y),
         ..default()
+    });
+
+    commands.spawn(PointLightBundle {
+        point_light: PointLight {
+            intensity: 5000.0,
+            range: 500.0,
+            shadows_enabled: true,
+            ..default()
+        },
+        transform: Transform::from_xyz(100.0, 150.0, 100.0),
+        ..default()
+    });
+
+    commands.insert_resource(AmbientLight {
+        color: Color::WHITE,
+        brightness: 0.2,
     });
 }
 
@@ -78,7 +103,7 @@ fn advance_frame(
     mut commands: Commands,
     time: Res<Time>,
     mut sim: ResMut<Simulation>,
-    q_cells: Query<(Entity, &CellMeta), With<CellEntity>>,
+    q_cells: Query<Entity, With<CellEntity>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -91,8 +116,7 @@ fn advance_frame(
         TIMER = 0.0;
     }
 
-    // Fully despawn all current cells
-    for (entity, _) in q_cells.iter() {
+    for entity in q_cells.iter() {
         commands.entity(entity).despawn_recursive();
     }
 
@@ -105,46 +129,101 @@ fn advance_frame(
 
     for (y, row) in grid.iter().enumerate() {
         for (x, cell) in row.iter().enumerate() {
-            let (shape, color, height) = match cell.as_str() {
-                "T" => (
-                    Mesh::from(Cylinder::new(3.0, 12.0)),
-                    Color::rgb(0.1, 0.6, 0.1),
-                    12.0,
-                ), // Tree
-                "*" => (
-                    Mesh::from(Cylinder::new(3.0, 12.0)),
-                    Color::rgb(1.0, 0.0, 0.0),
-                    12.0,
-                ), // Burning tree
+            match cell.as_str() {
+                "T" | "*" => {
+                    let is_burning = cell == "*";
+
+                    let trunk = meshes.add(Mesh::from(Cylinder::new(1.0, 4.0)));
+                    let leaves = meshes.add(Mesh::from(Sphere::new(4.0)));
+
+                    let pos = Vec3::new(
+                        offset_x + x as f32 * cell_size * spacing,
+                        2.0,
+                        offset_z + y as f32 * cell_size * spacing,
+                    );
+
+                    let leaf_color = if is_burning {
+                        Color::rgb(0.8, 0.1, 0.0)
+                    } else {
+                        Color::rgb(0.1, 0.6, 0.1)
+                    };
+
+                    let leaf_emissive = if is_burning {
+                        Color::rgb(1.0, 0.3, 0.1)
+                    } else {
+                        Color::BLACK
+                    };
+
+                    // Trunk
+                    commands
+                        .spawn(PbrBundle {
+                            mesh: trunk.clone(),
+                            material: materials.add(StandardMaterial {
+                                base_color: Color::rgb(0.4, 0.25, 0.1),
+                                perceptual_roughness: 1.0,
+                                ..default()
+                            }),
+                            transform: Transform::from_translation(pos),
+                            ..default()
+                        })
+                        .insert(CellEntity);
+
+                    // Leaves
+                    commands
+                        .spawn(PbrBundle {
+                            mesh: leaves.clone(),
+                            material: materials.add(StandardMaterial {
+                                base_color: leaf_color,
+                                emissive: leaf_emissive,
+                                perceptual_roughness: 0.7,
+                                ..default()
+                            }),
+                            transform: Transform::from_translation(pos + Vec3::Y * 5.0),
+                            ..default()
+                        })
+                        .insert(CellEntity);
+
+                    continue;
+                }
+                _ => {}
+            }
+
+            let (mesh, base_color, emissive, height) = match cell.as_str() {
                 "A" => (
-                    Mesh::from(Cuboid::new(cell_size, 2.0, cell_size)),
-                    Color::rgb(0.4, 0.4, 0.4),
-                    2.0,
-                ), // Tree ash
+                    meshes.add(Mesh::from(Cuboid::new(cell_size, 1.0, cell_size))),
+                    Color::rgb(0.2, 0.2, 0.2),
+                    Color::BLACK,
+                    1.0,
+                ),
                 "G" => (
-                    Mesh::from(Cylinder::new(5.0, 1.0)),
-                    Color::rgb(0.2, 1.0, 0.2),
-                    1.0,
-                ), // Grass
-                "+" => (
-                    Mesh::from(Cylinder::new(5.0, 1.0)),
-                    Color::rgb(1.0, 0.0, 0.0),
-                    1.0,
-                ), // Burning grass
-                "-" => (
-                    Mesh::from(Cylinder::new(5.0, 0.5)),
-                    Color::rgb(0.4, 0.4, 0.4),
+                    meshes.add(Mesh::from(Cylinder::new(5.0, 0.5))),
+                    Color::rgb(0.1, 0.8, 0.1),
+                    Color::BLACK,
                     0.5,
-                ), // Grass ash
+                ),
+                "+" => (
+                    meshes.add(Mesh::from(Cylinder::new(5.0, 0.5))),
+                    Color::rgb(0.9, 0.2, 0.0),
+                    Color::rgb(1.0, 0.5, 0.1),
+                    0.5,
+                ),
+                "-" => (
+                    meshes.add(Mesh::from(Cylinder::new(5.0, 0.2))),
+                    Color::rgb(0.3, 0.3, 0.3),
+                    Color::BLACK,
+                    0.2,
+                ),
                 "W" => (
-                    Mesh::from(Cuboid::new(cell_size, 5.0, cell_size)),
-                    Color::rgb(0.1, 0.3, 0.9),
-                    5.0,
-                ), // Water
+                    meshes.add(Mesh::from(Cuboid::new(cell_size, 0.8, cell_size))),
+                    Color::rgb(0.1, 0.3, 0.8),
+                    Color::BLACK,
+                    0.8,
+                ),
                 _ => (
-                    Mesh::from(Cuboid::new(cell_size, 1.0, cell_size)),
-                    Color::WHITE,
-                    1.0,
+                    meshes.add(Mesh::from(Cuboid::new(cell_size, 0.5, cell_size))),
+                    Color::GRAY,
+                    Color::BLACK,
+                    0.5,
                 ),
             };
 
@@ -156,9 +235,11 @@ fn advance_frame(
 
             commands
                 .spawn(PbrBundle {
-                    mesh: meshes.add(shape),
+                    mesh,
                     material: materials.add(StandardMaterial {
-                        base_color: color,
+                        base_color,
+                        emissive,
+                        perceptual_roughness: 0.8,
                         ..default()
                     }),
                     transform,
@@ -170,11 +251,4 @@ fn advance_frame(
     }
 
     sim.current = (sim.current + 1) % sim.frames.len();
-}
-
-fn entity_to_grid(entity: Entity, width: usize) -> (usize, usize) {
-    let id = entity.index() as usize;
-    let x = id % width;
-    let y = id / width;
-    (x, y)
 }
