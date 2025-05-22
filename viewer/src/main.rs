@@ -1,4 +1,4 @@
-use bevy::math::primitives::Cuboid;
+use bevy::math::primitives::{Cuboid, Cylinder};
 use bevy::prelude::*;
 use serde::Deserialize;
 use std::fs::File;
@@ -25,6 +25,11 @@ struct Simulation {
 #[derive(Component)]
 struct MainCamera;
 
+#[derive(Component)]
+struct CellMeta {
+    kind: String,
+}
+
 fn main() {
     App::new()
         .insert_resource(ClearColor(Color::rgb(0.05, 0.05, 0.1)))
@@ -38,7 +43,7 @@ fn main() {
             ..default()
         }))
         .add_systems(Startup, setup)
-        .add_systems(Update, advance_frame) // camera_controls removed
+        .add_systems(Update, advance_frame)
         .run();
 }
 
@@ -54,7 +59,6 @@ fn setup(mut commands: Commands) {
         height: data.height,
     });
 
-    // Camera
     commands.spawn((
         Camera3dBundle {
             transform: Transform::from_xyz(0.0, 200.0, 300.0)
@@ -64,7 +68,6 @@ fn setup(mut commands: Commands) {
         MainCamera,
     ));
 
-    // Light
     commands.spawn(PointLightBundle {
         transform: Transform::from_xyz(200.0, 400.0, 200.0),
         ..default()
@@ -75,7 +78,7 @@ fn advance_frame(
     mut commands: Commands,
     time: Res<Time>,
     mut sim: ResMut<Simulation>,
-    mut q_cells: Query<Entity, With<CellEntity>>,
+    q_cells: Query<(Entity, &CellMeta), With<CellEntity>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -88,8 +91,9 @@ fn advance_frame(
         TIMER = 0.0;
     }
 
-    for entity in q_cells.iter_mut() {
-        commands.entity(entity).despawn();
+    // Fully despawn all current cells
+    for (entity, _) in q_cells.iter() {
+        commands.entity(entity).despawn_recursive();
     }
 
     let cell_size = 10.0;
@@ -98,17 +102,50 @@ fn advance_frame(
     let offset_z = -(sim.height as f32 * cell_size * spacing) / 2.0;
 
     let grid = &sim.frames[sim.current];
+
     for (y, row) in grid.iter().enumerate() {
         for (x, cell) in row.iter().enumerate() {
-            let (color, height) = match cell.as_str() {
-                "T" => (Color::rgb(0.1, 0.6, 0.1), 10.0),
-                "W" => (Color::rgb(0.1, 0.3, 0.9), 5.0),
-                "G" => (Color::rgb(0.5, 1.0, 0.5), 6.0),
-                "*" => (Color::rgb(1.0, 0.3, 0.0), 12.0),
-                "+" => (Color::rgb(1.0, 0.85, 0.1), 9.0),
-                "A" => (Color::rgb(0.5, 0.5, 0.5), 2.0),
-                "-" => (Color::rgb(0.3, 0.3, 0.3), 2.5),
-                _ => (Color::WHITE, 1.0),
+            let (shape, color, height) = match cell.as_str() {
+                "T" => (
+                    Mesh::from(Cylinder::new(3.0, 12.0)),
+                    Color::rgb(0.1, 0.6, 0.1),
+                    12.0,
+                ), // Tree
+                "*" => (
+                    Mesh::from(Cylinder::new(3.0, 12.0)),
+                    Color::rgb(1.0, 0.0, 0.0),
+                    12.0,
+                ), // Burning tree
+                "A" => (
+                    Mesh::from(Cuboid::new(cell_size, 2.0, cell_size)),
+                    Color::rgb(0.4, 0.4, 0.4),
+                    2.0,
+                ), // Tree ash
+                "G" => (
+                    Mesh::from(Cylinder::new(5.0, 1.0)),
+                    Color::rgb(0.2, 1.0, 0.2),
+                    1.0,
+                ), // Grass
+                "+" => (
+                    Mesh::from(Cylinder::new(5.0, 1.0)),
+                    Color::rgb(1.0, 0.0, 0.0),
+                    1.0,
+                ), // Burning grass
+                "-" => (
+                    Mesh::from(Cylinder::new(5.0, 0.5)),
+                    Color::rgb(0.4, 0.4, 0.4),
+                    0.5,
+                ), // Grass ash
+                "W" => (
+                    Mesh::from(Cuboid::new(cell_size, 5.0, cell_size)),
+                    Color::rgb(0.1, 0.3, 0.9),
+                    5.0,
+                ), // Water
+                _ => (
+                    Mesh::from(Cuboid::new(cell_size, 1.0, cell_size)),
+                    Color::WHITE,
+                    1.0,
+                ),
             };
 
             let transform = Transform::from_xyz(
@@ -119,7 +156,7 @@ fn advance_frame(
 
             commands
                 .spawn(PbrBundle {
-                    mesh: meshes.add(Mesh::from(Cuboid::new(cell_size, height, cell_size))),
+                    mesh: meshes.add(shape),
                     material: materials.add(StandardMaterial {
                         base_color: color,
                         ..default()
@@ -127,9 +164,17 @@ fn advance_frame(
                     transform,
                     ..default()
                 })
-                .insert(CellEntity);
+                .insert(CellEntity)
+                .insert(CellMeta { kind: cell.clone() });
         }
     }
 
     sim.current = (sim.current + 1) % sim.frames.len();
+}
+
+fn entity_to_grid(entity: Entity, width: usize) -> (usize, usize) {
+    let id = entity.index() as usize;
+    let x = id % width;
+    let y = id / width;
+    (x, y)
 }
