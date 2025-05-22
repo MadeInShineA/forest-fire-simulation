@@ -19,6 +19,7 @@ struct SimulationParams {
     height: u32,
     burning_trees: u32,
     burning_grasses: u32,
+    number_of_steps: u32,
     trigger_simulation: bool,
 }
 
@@ -49,6 +50,7 @@ fn main() {
             height: 20,
             burning_trees: 15,
             burning_grasses: 20,
+            number_of_steps: 20,
             trigger_simulation: false,
         })
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -67,27 +69,37 @@ fn main() {
         .run();
 }
 
-fn ui_system(mut contexts: EguiContexts, mut params: ResMut<SimulationParams>) {
-    let num_cells = params.width * params.height;
-
+fn ui_system(
+    mut contexts: EguiContexts,
+    mut params: ResMut<SimulationParams>,
+    sim: Option<Res<Simulation>>,
+) {
+    // Simulation Controls window
     egui::Window::new("Simulation Controls").show(contexts.ctx_mut(), |ui| {
         ui.add(egui::Slider::new(&mut params.width, 10..=100).text("Width"));
         ui.add(egui::Slider::new(&mut params.height, 10..=100).text("Height"));
-        ui.add(egui::Slider::new(&mut params.burning_trees, 0..=100).text("Burning Trees %"));
-        ui.add(egui::Slider::new(&mut params.burning_grasses, 0..=100).text("Burning Grasses %"));
+        ui.add(egui::Slider::new(&mut params.burning_trees, 0..=100).text("Burning trees %"));
+        ui.add(egui::Slider::new(&mut params.burning_grasses, 0..=100).text("Burning grasses %"));
+        ui.add(egui::Slider::new(&mut params.number_of_steps, 1..=100).text("Number of steps"));
 
         if ui.button("Start Simulation").clicked() {
             params.trigger_simulation = true;
         }
     });
+
+    // Top center overlay for step number
+    if let Some(sim) = sim {
+        egui::TopBottomPanel::top("step_panel").show(contexts.ctx_mut(), |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.label(format!("Step {}/{}", sim.current, sim.frames.len() - 1));
+            });
+        });
+    }
 }
 
 fn start_simulation_button_system(
     mut commands: Commands,
     mut sim_params: ResMut<SimulationParams>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    asset_server: Res<AssetServer>,
     q_camera: Query<Entity, With<MainCamera>>,
 ) {
     if sim_params.trigger_simulation {

@@ -9,22 +9,30 @@ object Main extends App {
   val defaultHeight = 20
   val defaultOnFireTreePercent = 15
   val defaultOnFireGrassPercent = 20
+  val defaultNumberOfSteps = 20
 
   // Parse args: width height trees fires
-  val Array(width, height, onFireTreesPercent, onFireGrassPercent) =
+  val Array(
+    width,
+    height,
+    onFireTreesPercent,
+    onFireGrassPercent,
+    numberOfSteps
+  ) =
     args.map(_.toInt) ++
       Array(
         defaultWidth,
         defaultHeight,
         defaultOnFireTreePercent,
-        defaultOnFireGrassPercent
+        defaultOnFireGrassPercent,
+        defaultNumberOfSteps
       ).drop(
         args.length
       )
 
   val grid = new Grid(width, height)
     .igniteRandomFires(onFireTreesPercent, onFireGrassPercent)
-  val steps = (0 to 20).scanLeft(grid)((grid, _) => grid.nextStep())
+  val steps = (1 to 20).scanLeft(grid)((grid, _) => grid.nextStep())
 
   val json = Json.obj(
     "width" -> grid.width,
