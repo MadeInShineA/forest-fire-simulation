@@ -47,8 +47,8 @@ fn main() {
         .insert_resource(SimulationParams {
             width: 20,
             height: 20,
-            burning_trees: 5,
-            burning_grasses: 5,
+            burning_trees: 15,
+            burning_grasses: 20,
             trigger_simulation: false,
         })
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -73,10 +73,8 @@ fn ui_system(mut contexts: EguiContexts, mut params: ResMut<SimulationParams>) {
     egui::Window::new("Simulation Controls").show(contexts.ctx_mut(), |ui| {
         ui.add(egui::Slider::new(&mut params.width, 10..=100).text("Width"));
         ui.add(egui::Slider::new(&mut params.height, 10..=100).text("Height"));
-        ui.add(egui::Slider::new(&mut params.burning_trees, 1..=num_cells).text("Burning Trees"));
-        ui.add(
-            egui::Slider::new(&mut params.burning_grasses, 1..=num_cells).text("Burning Grasses"),
-        );
+        ui.add(egui::Slider::new(&mut params.burning_trees, 0..=100).text("Burning Trees %"));
+        ui.add(egui::Slider::new(&mut params.burning_grasses, 0..=100).text("Burning Grasses %"));
 
         if ui.button("Start Simulation").clicked() {
             params.trigger_simulation = true;

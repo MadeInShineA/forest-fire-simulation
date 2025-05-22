@@ -38,7 +38,16 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
     )
   }
 
-  def igniteRandomFires(countTrees: Int, countGrass: Int): Grid = {
+  def igniteRandomFires(percentTrees: Double, percentGrass: Double): Grid = {
+    require(
+      percentTrees >= 0 && percentTrees <= 100,
+      "percentTrees must be between 0 and 100"
+    )
+    require(
+      percentGrass >= 0 && percentGrass <= 100,
+      "percentGrass must be between 0 and 100"
+    )
+
     val treePositions = for {
       y <- 0 until height
       x <- 0 until width
@@ -50,6 +59,10 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
       x <- 0 until width
       if cells(y)(x).cellType == Grass
     } yield (x, y)
+
+    val countTrees = ((treePositions.length * percentTrees) / 100.0).round.toInt
+    val countGrass =
+      ((grassPositions.length * percentGrass) / 100.0).round.toInt
 
     val selectedTrees = Random.shuffle(treePositions).take(countTrees)
     val selectedGrass = Random.shuffle(grassPositions).take(countGrass)
