@@ -1,4 +1,3 @@
-
 // The simplest possible sbt build file is just one line:
 
 scalaVersion := "2.13.12"
@@ -13,7 +12,7 @@ scalaVersion := "2.13.12"
 
 // It's possible to define many kinds of settings, such as:
 
-name := "forrest-fire-simulation"
+name := "forest-fire-simulation"
 organization := "ch.epfl.scala"
 version := "1.0"
 
@@ -21,11 +20,13 @@ version := "1.0"
 // mostly only necessary if you intend to publish your library's binaries on a
 // place like Sonatype.
 
-
 // Want to use a published library in your project?
 // You can define other libraries as dependencies in your build like this:
 
-libraryDependencies += "org.scala-lang.modules" %% "scala-parser-combinators" % "2.3.0"
+libraryDependencies ++= Seq(
+  "org.scala-lang.modules" %% "scala-parser-combinators" % "2.3.0",
+  "com.typesafe.play" %% "play-json" % "2.9.4"
+)
 
 // Here, `libraryDependencies` is a set of dependencies, and by using `+=`,
 // we're adding the scala-parser-combinators dependency to the set of dependencies
