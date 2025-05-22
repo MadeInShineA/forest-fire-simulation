@@ -4,14 +4,29 @@ import java.io.PrintWriter
 import play.api.libs.json._
 
 object Main extends App {
-  import JsonFormats._
+  // Default parameters
+  val defaultWidth = 20
+  val defaultHeight = 20
+  val defaultOnFireTreeCount = 5
+  val defaultOnFireGrassCount = 5
 
-  val theGrid = new Grid(20, 10).igniteRandomTrees(5)
-  val steps = (0 to 10).scanLeft(theGrid)((grid, _) => grid.nextStep())
+  // Parse args: width height trees fires
+  val Array(width, height, trees, fires) = args.map(_.toInt) ++
+    Array(
+      defaultWidth,
+      defaultHeight,
+      defaultOnFireTreeCount,
+      defaultOnFireGrassCount
+    ).drop(
+      args.length
+    )
+
+  val grid = new Grid(width, height).igniteRandomFires(trees, fires)
+  val steps = (0 to 20).scanLeft(grid)((grid, _) => grid.nextStep())
 
   val json = Json.obj(
-    "width" -> theGrid.width,
-    "height" -> theGrid.height,
+    "width" -> grid.width,
+    "height" -> grid.height,
     "steps" -> steps.map(_.encodeCells)
   )
 
@@ -19,5 +34,7 @@ object Main extends App {
     out.write(Json.prettyPrint(json))
   }
 
-  println("Simulation written to simulation.json")
+  println(
+    s"Simulation written with size: ${width}x$height, Trees: $trees, Fires: $fires"
+  )
 }

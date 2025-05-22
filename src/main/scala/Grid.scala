@@ -38,18 +38,30 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
     )
   }
 
-  def igniteRandomTrees(count: Int): Grid = {
+  def igniteRandomFires(countTrees: Int, countGrass: Int): Grid = {
     val treePositions = for {
       y <- 0 until height
       x <- 0 until width
       if cells(y)(x).cellType == Tree
     } yield (x, y)
 
-    val selected = Random.shuffle(treePositions).take(count)
+    val grassPositions = for {
+      y <- 0 until height
+      x <- 0 until width
+      if cells(y)(x).cellType == Grass
+    } yield (x, y)
+
+    val selectedTrees = Random.shuffle(treePositions).take(countTrees)
+    val selectedGrass = Random.shuffle(grassPositions).take(countGrass)
 
     val newCells = cells.zipWithIndex.map { case (row, y) =>
       row.zipWithIndex.map { case (cell, xCoord) =>
-        if (selected.contains((xCoord, y))) Cell(BurningTree) else cell
+        if (selectedTrees.contains((xCoord, y)))
+          Cell(BurningTree)
+        else if (selectedGrass.contains((xCoord, y)))
+          Cell(BurningGrass)
+        else
+          cell
       }
     }
 
@@ -75,7 +87,7 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
     val newCells = Vector.tabulate(height, width) { (y, x) =>
       val current = cells(y)(x).cellType
       current match {
-        case Tree if isBurningNeighbor(x, y) && rand.nextDouble() < 0.3 =>
+        case Tree if isBurningNeighbor(x, y) && rand.nextDouble() < 0.5 =>
           Cell(BurningTree)
         case Grass if isBurningNeighbor(x, y) && rand.nextDouble() < 0.8 =>
           Cell(BurningGrass)
