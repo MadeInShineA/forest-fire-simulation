@@ -112,6 +112,7 @@ fn start_simulation_button_system(
             sim_params.height,
             sim_params.burning_trees,
             sim_params.burning_grasses,
+            sim_params.number_of_steps,
         );
 
         if let Some(data) = load_simulation_data() {
@@ -162,12 +163,18 @@ fn start_simulation_button_system(
     }
 }
 
-fn run_scala_simulation(width: u32, height: u32, burning_trees: u32, burning_grasses: u32) {
+fn run_scala_simulation(
+    width: u32,
+    height: u32,
+    burning_trees: u32,
+    burning_grasses: u32,
+    steps: u32,
+) {
     let scala_project_path = "../";
 
     let command = format!(
-        "sbt \"run {} {} {} {}\"",
-        width, height, burning_trees, burning_grasses
+        "sbt \"run {} {} {} {} {}\"",
+        width, height, burning_trees, burning_grasses, steps
     );
 
     let output = Command::new("sh")

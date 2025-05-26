@@ -11,28 +11,35 @@ object Main extends App {
   val defaultOnFireGrassPercent = 20
   val defaultNumberOfSteps = 20
 
-  // Parse args: width height trees fires
+  // Filter out "--" from sbt args
+  val filteredArgs = args.dropWhile(_ == "--")
+
+  // Safely parse up to 5 arguments and fallback to defaults
+  val parsedArgs = filteredArgs.map(_.toIntOption).toList
+  val finalArgs = (parsedArgs ++ List(
+    Some(defaultWidth),
+    Some(defaultHeight),
+    Some(defaultOnFireTreePercent),
+    Some(defaultOnFireGrassPercent),
+    Some(defaultNumberOfSteps)
+  )).take(5).map(_.getOrElse(0))
+
   val Array(
     width,
     height,
     onFireTreesPercent,
     onFireGrassPercent,
     numberOfSteps
-  ) =
-    args.map(_.toInt) ++
-      Array(
-        defaultWidth,
-        defaultHeight,
-        defaultOnFireTreePercent,
-        defaultOnFireGrassPercent,
-        defaultNumberOfSteps
-      ).drop(
-        args.length
-      )
+  ) = finalArgs.toArray
+
+  println(
+    s"Using parameters: width=$width, height=$height, onFireTreesPercent=$onFireTreesPercent, onFireGrassPercent=$onFireGrassPercent, numberOfSteps=$numberOfSteps"
+  )
 
   val grid = new Grid(width, height)
     .igniteRandomFires(onFireTreesPercent, onFireGrassPercent)
-  val steps = (1 to 20).scanLeft(grid)((grid, _) => grid.nextStep())
+
+  val steps = (1 to numberOfSteps).scanLeft(grid)((g, _) => g.nextStep())
 
   val json = Json.obj(
     "width" -> grid.width,
@@ -45,6 +52,6 @@ object Main extends App {
   }
 
   println(
-    s"Simulation written with size: ${width}x$height, Trees: $onFireTreesPercent, Fires: $onFireGrassPercent"
+    s"Simulation written with size: ${width}x$height, Trees: $onFireTreesPercent%, Fires: $onFireGrassPercent%"
   )
 }
