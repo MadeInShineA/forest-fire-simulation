@@ -219,7 +219,7 @@ fn start_simulation_button_system(
 
         // ✅ Run precompiled Scala instead of sbt
 
-        let script_path = std::fs::canonicalize("../run-sim.sh").expect("Script not found");
+        let script_path = std::fs::canonicalize("run-sim.sh").expect("Script not found");
         let command = format!(
             "{} {} {} {} {} {}",
             script_path.display(),
@@ -234,7 +234,7 @@ fn start_simulation_button_system(
             let mut child = Command::new("sh")
                 .arg("-c")
                 .arg(&command)
-                .current_dir("../")
+                .current_dir(".")
                 .stdout(Stdio::piped())
                 .spawn()
                 .expect("Failed to start Scala process");

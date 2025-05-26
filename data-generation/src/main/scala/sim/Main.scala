@@ -49,7 +49,7 @@ object Main extends App {
     "steps" -> steps.map(_.encodeCells)
   )
 
-  Using.resource(new PrintWriter("viewer/assets/simulation.json")) { out =>
+  Using.resource(new PrintWriter("assets/simulation.json")) { out =>
     out.write(Json.prettyPrint(json))
   }
 }
