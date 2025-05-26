@@ -64,9 +64,12 @@ struct PlaybackControl {
 
 #[derive(Resource, Default, Clone)]
 struct SimulationStats {
-    burning_trees_over_time: Vec<f64>,
-    grasses_over_time: Vec<f64>,
-    ashes_over_time: Vec<f64>,
+    trees_over_time: Vec<i64>,
+    burning_trees_over_time: Vec<i64>,
+    tree_ashes_over_time: Vec<i64>,
+    grasses_over_time: Vec<i64>,
+    burning_grasses_over_time: Vec<i64>,
+    grass_ashes_over_time: Vec<i64>,
 }
 
 #[derive(Component)]
@@ -134,8 +137,14 @@ fn setup_cached_assets(
         "water",
         meshes.add(Mesh::from(Cuboid::new(10.0, 0.8, 10.0))),
     );
-    mesh_map.insert("fire", meshes.add(Mesh::from(Cylinder::new(5.0, 0.5))));
-    mesh_map.insert("burnt", meshes.add(Mesh::from(Cylinder::new(5.0, 0.2))));
+    mesh_map.insert(
+        "burning_grass",
+        meshes.add(Mesh::from(Cylinder::new(5.0, 0.5))),
+    );
+    mesh_map.insert(
+        "burnt_grass",
+        meshes.add(Mesh::from(Cylinder::new(5.0, 0.2))),
+    );
 
     let mut mat_map = HashMap::new();
     mat_map.insert(
@@ -184,7 +193,7 @@ fn setup_cached_assets(
         }),
     );
     mat_map.insert(
-        "fire",
+        "burning_grass",
         materials.add(StandardMaterial {
             base_color: Color::rgb(0.9, 0.2, 0.0),
             emissive: Color::rgb(3.0, 1.2, 0.3),
@@ -192,7 +201,7 @@ fn setup_cached_assets(
         }),
     );
     mat_map.insert(
-        "burnt",
+        "burnt_grass",
         materials.add(StandardMaterial {
             base_color: Color::rgb(0.3, 0.3, 0.3),
             ..default()
@@ -300,6 +309,7 @@ fn check_simulation_ready_system(
     };
 
     if let Some(data) = data_opt {
+        commands.insert_resource(SimulationStats::default());
         commands.insert_resource(Simulation {
             frames: data.steps,
             current: 0,
@@ -382,9 +392,12 @@ fn advance_frame(
     let Some(mut sim) = sim else {
         return;
     };
+
     for entity in q_cells.iter() {
         commands.entity(entity).despawn_recursive();
     }
+
+    // Handle frame navigation
     if playback.go_to_start {
         sim.current = 0;
         playback.go_to_start = false;
@@ -397,13 +410,21 @@ fn advance_frame(
         }
         playback.step_back = false;
     }
+
     let grid = &sim.frames[sim.current];
     let cell_size = 10.0;
     let spacing = 1.5;
     let offset_x = -(sim.width as f32 * cell_size * spacing) / 2.0;
     let offset_z = -(sim.height as f32 * cell_size * spacing) / 2.0;
 
-    let (mut trees, mut grasses, mut ashes) = (0, 0, 0);
+    let (
+        mut trees,
+        mut burning_trees,
+        mut tree_ashes,
+        mut grasses,
+        mut burning_grasses,
+        mut grass_ashes,
+    ) = (0, 0, 0, 0, 0, 0);
 
     for (y, row) in grid.iter().enumerate() {
         for (x, cell) in row.iter().enumerate() {
@@ -416,7 +437,9 @@ fn advance_frame(
                 "T" | "*" => {
                     let burning = cell == "*";
                     if burning {
-                        trees += 1;
+                        burning_trees += 1;
+                    } else {
+                        trees += 1
                     }
                     commands.spawn((
                         PbrBundle {
@@ -446,25 +469,54 @@ fn advance_frame(
                     spawn_cell(&mut commands, &cache, "grass", pos);
                 }
                 "A" => {
-                    ashes += 1;
+                    tree_ashes += 1;
                     spawn_cell(&mut commands, &cache, "ash", pos);
                 }
                 "W" => spawn_cell(&mut commands, &cache, "water", pos),
-                "+" => spawn_cell(&mut commands, &cache, "fire", pos),
-                "-" => spawn_cell(&mut commands, &cache, "burnt", pos),
-                _ => spawn_cell(&mut commands, &cache, "ash", pos),
+                "+" => {
+                    burning_grasses += 1;
+                    spawn_cell(&mut commands, &cache, "burning_grass", pos)
+                }
+                "-" => {
+                    grass_ashes += 1;
+                    spawn_cell(&mut commands, &cache, "burnt_grass", pos)
+                }
+                _ => {
+                    tree_ashes += 1;
+                    spawn_cell(&mut commands, &cache, "ash", pos)
+                }
             }
         }
     }
 
-    stats.burning_trees_over_time.push(trees as f64);
-    stats.grasses_over_time.push(grasses as f64);
-    stats.ashes_over_time.push(ashes as f64);
+    // Truncate stats to the current frame index before appending
+    stats.trees_over_time.truncate(sim.current);
+    stats.burning_trees_over_time.truncate(sim.current);
+    stats.tree_ashes_over_time.truncate(sim.current);
+    stats.grasses_over_time.truncate(sim.current);
+    stats.burning_grasses_over_time.truncate(sim.current);
+    stats.grass_ashes_over_time.truncate(sim.current);
 
+    stats.trees_over_time.push(trees);
+    stats.burning_trees_over_time.push(burning_trees);
+    stats.tree_ashes_over_time.push(tree_ashes);
+    stats.grasses_over_time.push(grasses);
+    stats.burning_grasses_over_time.push(burning_grasses);
+    stats.grass_ashes_over_time.push(grass_ashes);
+
+    // Advance frame if playing or step forward requested
     if playback.step_forward {
         sim.current = (sim.current + 1).min(sim.frames.len() - 1);
         playback.step_forward = false;
     } else if !playback.paused {
+        if sim.current == sim.frames.len() - 1 {
+            stats.trees_over_time.clear();
+            stats.burning_trees_over_time.clear();
+            stats.tree_ashes_over_time.clear();
+            stats.grasses_over_time.clear();
+            stats.burning_grasses_over_time.clear();
+            stats.grass_ashes_over_time.clear();
+        }
         sim.current = (sim.current + 1) % sim.frames.len();
     }
 }
@@ -558,28 +610,27 @@ fn ui_system(
                     .height(200.0)
                     .width(ui.available_width())
                     .show(ui, |plot_ui| {
-                        let all_trees = stats
-                            .burning_trees_over_time
+                        let trees = stats
+                            .trees_over_time
                             .iter()
-                            .zip(stats.ashes_over_time.iter())
                             .enumerate()
-                            .map(|(i, (&burning, &ash))| [i as f64, (burning + ash) as f64])
+                            .map(|(i, &v)| [i as f64, v as f64])
                             .collect::<PlotPoints>();
-                        let burning: PlotPoints = stats
+                        let burning_trees: PlotPoints = stats
                             .burning_trees_over_time
                             .iter()
                             .enumerate()
-                            .map(|(i, &v)| [i as f64, v])
+                            .map(|(i, &v)| [i as f64, v as f64])
                             .collect();
-                        let ashes: PlotPoints = stats
-                            .ashes_over_time
+                        let tree_ashes: PlotPoints = stats
+                            .tree_ashes_over_time
                             .iter()
                             .enumerate()
-                            .map(|(i, &v)| [i as f64, v])
+                            .map(|(i, &v)| [i as f64, v as f64])
                             .collect();
-                        plot_ui.line(Line::new(all_trees).name("Total Trees"));
-                        plot_ui.line(Line::new(burning).name("Burning Trees"));
-                        plot_ui.line(Line::new(ashes).name("Tree Ashes"));
+                        plot_ui.line(Line::new(trees).name("Trees"));
+                        plot_ui.line(Line::new(burning_trees).name("Burning Trees"));
+                        plot_ui.line(Line::new(tree_ashes).name("Tree Ashes"));
                     });
 
                 ui.separator();
@@ -593,16 +644,24 @@ fn ui_system(
                             .grasses_over_time
                             .iter()
                             .enumerate()
-                            .map(|(i, &v)| [i as f64, v])
+                            .map(|(i, &v)| [i as f64, v as f64])
                             .collect();
-                        let ashes: PlotPoints = stats
-                            .ashes_over_time
+                        let burning_grasses: PlotPoints = stats
+                            .burning_grasses_over_time
                             .iter()
                             .enumerate()
-                            .map(|(i, &v)| [i as f64, v])
+                            .map(|(i, &v)| [i as f64, v as f64])
+                            .collect();
+
+                        let grass_ashes: PlotPoints = stats
+                            .grass_ashes_over_time
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &v)| [i as f64, v as f64])
                             .collect();
                         plot_ui.line(Line::new(grasses).name("Grasses"));
-                        plot_ui.line(Line::new(ashes).name("Grass Ashes"));
+                        plot_ui.line(Line::new(burning_grasses).name("Burning Grasses"));
+                        plot_ui.line(Line::new(grass_ashes).name("Grass ashes"));
                     });
             });
     }
