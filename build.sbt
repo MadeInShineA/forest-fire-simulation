@@ -27,6 +27,7 @@ libraryDependencies ++= Seq(
   "org.scala-lang.modules" %% "scala-parser-combinators" % "2.3.0",
   "com.typesafe.play" %% "play-json" % "2.9.4"
 )
+Compile / mainClass := Some("sim.Main")
 
 // Here, `libraryDependencies` is a set of dependencies, and by using `+=`,
 // we're adding the scala-parser-combinators dependency to the set of dependencies

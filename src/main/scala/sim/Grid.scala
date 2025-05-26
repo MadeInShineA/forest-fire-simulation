@@ -1,3 +1,5 @@
+package sim
+
 import scala.util.{Random, Using}
 import java.io.PrintWriter
 import play.api.libs.json._
