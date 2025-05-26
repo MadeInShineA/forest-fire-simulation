@@ -1,3 +1,5 @@
+//! Forest Fire Simulation with cleanup and proper resource management
+
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
@@ -31,6 +33,9 @@ struct Simulation {
     height: usize,
 }
 
+#[derive(Resource)]
+struct FrameTimer(Timer);
+
 #[derive(Component)]
 struct CellEntity;
 
@@ -38,9 +43,7 @@ struct CellEntity;
 struct MainCamera;
 
 #[derive(Component)]
-struct CellMeta {
-    kind: String,
-}
+struct SimulationEntity;
 
 fn main() {
     App::new()
@@ -53,6 +56,7 @@ fn main() {
             number_of_steps: 20,
             trigger_simulation: false,
         })
+        .insert_resource(FrameTimer(Timer::from_seconds(0.4, TimerMode::Repeating)))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "🔥 Forest Fire Simulation 3D".into(),
@@ -74,7 +78,6 @@ fn ui_system(
     mut params: ResMut<SimulationParams>,
     sim: Option<Res<Simulation>>,
 ) {
-    // Simulation Controls window
     egui::Window::new("Simulation Controls").show(contexts.ctx_mut(), |ui| {
         ui.add(egui::Slider::new(&mut params.width, 10..=100).text("Width"));
         ui.add(egui::Slider::new(&mut params.height, 10..=100).text("Height"));
@@ -87,7 +90,6 @@ fn ui_system(
         }
     });
 
-    // Top center overlay for step number
     if let Some(sim) = sim {
         egui::TopBottomPanel::top("step_panel").show(contexts.ctx_mut(), |ui| {
             ui.horizontal_centered(|ui| {
@@ -100,10 +102,10 @@ fn ui_system(
 fn start_simulation_button_system(
     mut commands: Commands,
     mut sim_params: ResMut<SimulationParams>,
-    q_camera: Query<Entity, With<MainCamera>>,
+    q_old_entities: Query<Entity, With<SimulationEntity>>,
 ) {
     if sim_params.trigger_simulation {
-        for entity in q_camera.iter() {
+        for entity in q_old_entities.iter() {
             commands.entity(entity).despawn_recursive();
         }
 
@@ -130,28 +132,36 @@ fn start_simulation_button_system(
                     ..default()
                 },
                 MainCamera,
+                SimulationEntity,
             ));
 
-            commands.spawn(DirectionalLightBundle {
-                directional_light: DirectionalLight {
-                    shadows_enabled: true,
-                    illuminance: 10000.0,
+            commands.spawn((
+                DirectionalLightBundle {
+                    directional_light: DirectionalLight {
+                        shadows_enabled: true,
+                        illuminance: 10000.0,
+                        ..default()
+                    },
+                    transform: Transform::from_xyz(0.0, 200.0, 100.0)
+                        .looking_at(Vec3::ZERO, Vec3::Y),
                     ..default()
                 },
-                transform: Transform::from_xyz(0.0, 200.0, 100.0).looking_at(Vec3::ZERO, Vec3::Y),
-                ..default()
-            });
+                SimulationEntity,
+            ));
 
-            commands.spawn(PointLightBundle {
-                point_light: PointLight {
-                    intensity: 5000.0,
-                    range: 500.0,
-                    shadows_enabled: true,
+            commands.spawn((
+                PointLightBundle {
+                    point_light: PointLight {
+                        intensity: 5000.0,
+                        range: 500.0,
+                        shadows_enabled: true,
+                        ..default()
+                    },
+                    transform: Transform::from_xyz(100.0, 150.0, 100.0),
                     ..default()
                 },
-                transform: Transform::from_xyz(100.0, 150.0, 100.0),
-                ..default()
-            });
+                SimulationEntity,
+            ));
 
             commands.insert_resource(AmbientLight {
                 color: Color::WHITE,
@@ -203,23 +213,19 @@ fn load_simulation_data() -> Option<GridData> {
 fn advance_frame(
     mut commands: Commands,
     time: Res<Time>,
-    sim: Option<ResMut<Simulation>>,
+    mut timer: ResMut<FrameTimer>,
+    mut sim: Option<ResMut<Simulation>>,
     q_cells: Query<Entity, With<CellEntity>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    if !timer.0.tick(time.delta()).just_finished() {
+        return;
+    }
+
     let Some(mut sim) = sim else {
         return;
     };
-
-    static mut TIMER: f32 = 0.0;
-    unsafe {
-        TIMER += time.delta_seconds();
-        if TIMER < 0.4 {
-            return;
-        }
-        TIMER = 0.0;
-    }
 
     for entity in q_cells.iter() {
         commands.entity(entity).despawn_recursive();
@@ -240,147 +246,120 @@ fn advance_frame(
                 offset_z + y as f32 * cell_size * spacing,
             );
 
-            match cell.as_str() {
-                "T" | "*" => {
-                    let is_burning = cell == "*";
-                    let trunk = meshes.add(Mesh::from(Cylinder::new(1.0, 4.0)));
-                    let leaves = meshes.add(Mesh::from(Sphere::new(4.0)));
+            if cell == "T" || cell == "*" {
+                let is_burning = cell == "*";
 
-                    let leaf_color = if is_burning {
+                let trunk = meshes.add(Mesh::from(Cylinder::new(1.0, 4.0)));
+                let trunk_material = materials.add(StandardMaterial {
+                    base_color: Color::rgb(0.4, 0.25, 0.1),
+                    ..default()
+                });
+
+                let leaves = meshes.add(Mesh::from(Sphere::new(4.0)));
+                let leaf_material = materials.add(StandardMaterial {
+                    base_color: if is_burning {
                         Color::rgb(0.8, 0.1, 0.0)
                     } else {
                         Color::rgb(0.1, 0.6, 0.1)
-                    };
-
-                    let leaf_emissive = if is_burning {
-                        Color::rgb(3.0, 0.6, 0.3) // simulate brightness
+                    },
+                    emissive: if is_burning {
+                        Color::rgb(3.0, 0.6, 0.3)
                     } else {
                         Color::BLACK
-                    };
+                    },
+                    ..default()
+                });
 
-                    commands
-                        .spawn(PbrBundle {
-                            mesh: trunk.clone(),
-                            material: materials.add(StandardMaterial {
-                                base_color: Color::rgb(0.4, 0.25, 0.1),
-                                perceptual_roughness: 1.0,
-                                ..default()
-                            }),
-                            transform: Transform::from_translation(pos + Vec3::Y * 2.0),
-                            ..default()
-                        })
-                        .insert(CellEntity);
+                commands.spawn((
+                    PbrBundle {
+                        mesh: trunk,
+                        material: trunk_material,
+                        transform: Transform::from_translation(pos + Vec3::Y * 2.0),
+                        ..default()
+                    },
+                    CellEntity,
+                    SimulationEntity,
+                ));
 
-                    commands
-                        .spawn(PbrBundle {
-                            mesh: leaves.clone(),
-                            material: materials.add(StandardMaterial {
-                                base_color: leaf_color,
-                                emissive: leaf_emissive,
-                                perceptual_roughness: 0.7,
-                                ..default()
-                            }),
-                            transform: Transform::from_translation(pos + Vec3::Y * 7.0),
-                            ..default()
-                        })
-                        .insert(CellEntity);
-                }
-                "A" => {
-                    let mesh = meshes.add(Mesh::from(Cuboid::new(cell_size, 0.5, cell_size)));
-                    let material = materials.add(StandardMaterial {
-                        base_color: Color::rgb(0.2, 0.2, 0.2),
-                        perceptual_roughness: 1.0,
+                commands.spawn((
+                    PbrBundle {
+                        mesh: leaves,
+                        material: leaf_material,
+                        transform: Transform::from_translation(pos + Vec3::Y * 7.0),
                         ..default()
-                    });
-                    commands
-                        .spawn(PbrBundle {
-                            mesh,
-                            material,
-                            transform: Transform::from_translation(pos + Vec3::Y * 0.25),
-                            ..default()
-                        })
-                        .insert(CellEntity);
-                }
-                "G" => {
-                    let mesh = meshes.add(Mesh::from(Cylinder::new(5.0, 0.5)));
-                    let material = materials.add(StandardMaterial {
-                        base_color: Color::rgb(0.1, 0.8, 0.1),
-                        ..default()
-                    });
-                    commands
-                        .spawn(PbrBundle {
-                            mesh,
-                            material,
-                            transform: Transform::from_translation(pos + Vec3::Y * 0.25),
-                            ..default()
-                        })
-                        .insert(CellEntity);
-                }
-                "W" => {
-                    let mesh = meshes.add(Mesh::from(Cuboid::new(cell_size, 0.8, cell_size)));
-                    let material = materials.add(StandardMaterial {
-                        base_color: Color::rgb(0.1, 0.3, 0.8),
-                        reflectance: 0.8,
-                        perceptual_roughness: 0.3,
-                        ..default()
-                    });
-                    commands
-                        .spawn(PbrBundle {
-                            mesh,
-                            material,
-                            transform: Transform::from_translation(pos + Vec3::Y * 0.4),
-                            ..default()
-                        })
-                        .insert(CellEntity);
-                }
-                "+" => {
-                    let mesh = meshes.add(Mesh::from(Cylinder::new(5.0, 0.5)));
-                    let material = materials.add(StandardMaterial {
-                        base_color: Color::rgb(0.9, 0.2, 0.0),
-                        emissive: Color::rgb(3.0, 1.2, 0.3), // simulate brightness
-                        perceptual_roughness: 0.4,
-                        ..default()
-                    });
-                    commands
-                        .spawn(PbrBundle {
-                            mesh,
-                            material,
-                            transform: Transform::from_translation(pos + Vec3::Y * 0.25),
-                            ..default()
-                        })
-                        .insert(CellEntity);
-                }
-                "-" => {
-                    let mesh = meshes.add(Mesh::from(Cylinder::new(5.0, 0.2)));
-                    let material = materials.add(StandardMaterial {
-                        base_color: Color::rgb(0.3, 0.3, 0.3),
-                        ..default()
-                    });
-                    commands
-                        .spawn(PbrBundle {
-                            mesh,
-                            material,
-                            transform: Transform::from_translation(pos + Vec3::Y * 0.1),
-                            ..default()
-                        })
-                        .insert(CellEntity);
-                }
-                _ => {
-                    let mesh = meshes.add(Mesh::from(Cuboid::new(cell_size, 0.5, cell_size)));
-                    let material = materials.add(StandardMaterial {
-                        base_color: Color::GRAY,
-                        ..default()
-                    });
-                    commands
-                        .spawn(PbrBundle {
-                            mesh,
-                            material,
-                            transform: Transform::from_translation(pos + Vec3::Y * 0.25),
-                            ..default()
-                        })
-                        .insert(CellEntity);
-                }
+                    },
+                    CellEntity,
+                    SimulationEntity,
+                ));
+
+                continue;
             }
+            let pos = Vec3::new(
+                offset_x + x as f32 * cell_size * spacing,
+                0.0,
+                offset_z + y as f32 * cell_size * spacing,
+            );
+
+            let mesh = match cell.as_str() {
+                "T" | "*" => meshes.add(Mesh::from(Cylinder::new(1.0, 4.0))),
+                "A" => meshes.add(Mesh::from(Cuboid::new(cell_size, 0.5, cell_size))),
+                "G" => meshes.add(Mesh::from(Cylinder::new(5.0, 0.5))),
+                "W" => meshes.add(Mesh::from(Cuboid::new(cell_size, 0.8, cell_size))),
+                "+" => meshes.add(Mesh::from(Cylinder::new(5.0, 0.5))),
+                "-" => meshes.add(Mesh::from(Cylinder::new(5.0, 0.2))),
+                _ => meshes.add(Mesh::from(Cuboid::new(cell_size, 0.5, cell_size))),
+            };
+
+            let material = match cell.as_str() {
+                "T" => materials.add(StandardMaterial {
+                    base_color: Color::rgb(0.1, 0.6, 0.1),
+                    emissive: Color::BLACK,
+                    ..default()
+                }),
+                "*" => materials.add(StandardMaterial {
+                    base_color: Color::rgb(0.8, 0.1, 0.0),
+                    emissive: Color::rgb(3.0, 0.6, 0.3),
+                    ..default()
+                }),
+                "A" => materials.add(StandardMaterial {
+                    base_color: Color::rgb(0.2, 0.2, 0.2),
+                    ..default()
+                }),
+                "G" => materials.add(StandardMaterial {
+                    base_color: Color::rgb(0.1, 0.8, 0.1),
+                    ..default()
+                }),
+                "W" => materials.add(StandardMaterial {
+                    base_color: Color::rgb(0.1, 0.3, 0.8),
+                    reflectance: 0.8,
+                    perceptual_roughness: 0.3,
+                    ..default()
+                }),
+                "+" => materials.add(StandardMaterial {
+                    base_color: Color::rgb(0.9, 0.2, 0.0),
+                    emissive: Color::rgb(3.0, 1.2, 0.3),
+                    ..default()
+                }),
+                "-" => materials.add(StandardMaterial {
+                    base_color: Color::rgb(0.3, 0.3, 0.3),
+                    ..default()
+                }),
+                _ => materials.add(StandardMaterial {
+                    base_color: Color::GRAY,
+                    ..default()
+                }),
+            };
+
+            commands.spawn((
+                PbrBundle {
+                    mesh,
+                    material,
+                    transform: Transform::from_translation(pos + Vec3::Y * 0.25),
+                    ..default()
+                },
+                CellEntity,
+                SimulationEntity,
+            ));
         }
     }
 
