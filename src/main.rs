@@ -1,6 +1,7 @@
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
+use egui_plot::{Legend, Line, Plot, PlotPoints};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs::File;
@@ -8,7 +9,6 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
-
 #[derive(Deserialize, Clone)]
 struct GridData {
     width: usize,
@@ -62,6 +62,13 @@ struct PlaybackControl {
     go_to_end: bool,
 }
 
+#[derive(Resource, Default, Clone)]
+struct SimulationStats {
+    burning_trees_over_time: Vec<f64>,
+    grasses_over_time: Vec<f64>,
+    ashes_over_time: Vec<f64>,
+}
+
 #[derive(Component)]
 struct CellEntity;
 #[derive(Component)]
@@ -90,6 +97,7 @@ fn main() {
         .insert_resource(PlaybackControl::default())
         .insert_resource(LoadingScreen(false))
         .insert_resource(PendingSimulation::default())
+        .insert_resource(SimulationStats::default())
         .insert_resource(LoadingTextTimer {
             timer: Timer::from_seconds(0.5, TimerMode::Repeating),
             dot_count: 0,
@@ -353,6 +361,7 @@ fn advance_frame(
     mut playback: ResMut<PlaybackControl>,
     q_cells: Query<Entity, With<CellEntity>>,
     cache: Res<CachedAssets>,
+    mut stats: ResMut<SimulationStats>,
 ) {
     if playback.paused
         && !playback.step_forward
@@ -393,6 +402,9 @@ fn advance_frame(
     let spacing = 1.5;
     let offset_x = -(sim.width as f32 * cell_size * spacing) / 2.0;
     let offset_z = -(sim.height as f32 * cell_size * spacing) / 2.0;
+
+    let (mut trees, mut grasses, mut ashes) = (0, 0, 0);
+
     for (y, row) in grid.iter().enumerate() {
         for (x, cell) in row.iter().enumerate() {
             let pos = Vec3::new(
@@ -403,6 +415,9 @@ fn advance_frame(
             match cell.as_str() {
                 "T" | "*" => {
                     let burning = cell == "*";
+                    if burning {
+                        trees += 1;
+                    }
                     commands.spawn((
                         PbrBundle {
                             mesh: cache.meshes["trunk"].clone(),
@@ -426,8 +441,14 @@ fn advance_frame(
                         SimulationEntity,
                     ));
                 }
-                "A" => spawn_cell(&mut commands, &cache, "ash", pos),
-                "G" => spawn_cell(&mut commands, &cache, "grass", pos),
+                "G" => {
+                    grasses += 1;
+                    spawn_cell(&mut commands, &cache, "grass", pos);
+                }
+                "A" => {
+                    ashes += 1;
+                    spawn_cell(&mut commands, &cache, "ash", pos);
+                }
                 "W" => spawn_cell(&mut commands, &cache, "water", pos),
                 "+" => spawn_cell(&mut commands, &cache, "fire", pos),
                 "-" => spawn_cell(&mut commands, &cache, "burnt", pos),
@@ -435,6 +456,11 @@ fn advance_frame(
             }
         }
     }
+
+    stats.burning_trees_over_time.push(trees as f64);
+    stats.grasses_over_time.push(grasses as f64);
+    stats.ashes_over_time.push(ashes as f64);
+
     if playback.step_forward {
         sim.current = (sim.current + 1).min(sim.frames.len() - 1);
         playback.step_forward = false;
@@ -463,6 +489,7 @@ fn ui_system(
     mut text_timer: ResMut<LoadingTextTimer>,
     time: Res<Time>,
     mut playback: ResMut<PlaybackControl>,
+    stats: Res<SimulationStats>,
 ) {
     if loading.0 {
         text_timer.timer.tick(time.delta());
@@ -472,7 +499,7 @@ fn ui_system(
         let dots = ".".repeat(text_timer.dot_count);
         egui::TopBottomPanel::top("loading_panel").show(contexts.ctx_mut(), |ui| {
             ui.vertical_centered(|ui| {
-                ui.heading("⏳ Generating Simulation");
+                ui.heading("\u{23f3} Generating Simulation");
                 ui.label(format!("Loading{}", dots));
             });
         });
@@ -491,26 +518,26 @@ fn ui_system(
             ui.separator();
             ui.label("Playback Controls:");
             ui.horizontal(|ui| {
-                if ui.button("|⏮ First").clicked() {
+                if ui.button("|\u{23ee} First").clicked() {
                     playback.go_to_start = true;
                 }
-                if ui.button("⏮ Go Back").clicked() {
+                if ui.button("\u{23ee} Go Back").clicked() {
                     playback.step_back = true;
                 }
                 if ui
                     .button(if playback.paused {
-                        "▶ Resume"
+                        "\u{25b6} Resume"
                     } else {
-                        "⏸ Pause"
+                        "\u{23f8} Pause"
                     })
                     .clicked()
                 {
                     playback.paused = !playback.paused;
                 }
-                if ui.button("⏭ Go Forward").clicked() {
+                if ui.button("\u{23ed} Go Forward").clicked() {
                     playback.step_forward = true;
                 }
-                if ui.button("Last |⏭").clicked() {
+                if ui.button("Last |\u{23ed}").clicked() {
                     playback.go_to_end = true;
                 }
             });
@@ -522,6 +549,62 @@ fn ui_system(
                 ui.label(format!("Step {}/{}", sim.current, sim.frames.len() - 1));
             });
         });
+        egui::Window::new("Simulation Graphs")
+            .resizable(true)
+            .show(contexts.ctx_mut(), |ui| {
+                ui.label("Tree Status Over Time");
+                Plot::new("Trees")
+                    .legend(Legend::default())
+                    .height(200.0)
+                    .width(ui.available_width())
+                    .show(ui, |plot_ui| {
+                        let all_trees = stats
+                            .burning_trees_over_time
+                            .iter()
+                            .zip(stats.ashes_over_time.iter())
+                            .enumerate()
+                            .map(|(i, (&burning, &ash))| [i as f64, (burning + ash) as f64])
+                            .collect::<PlotPoints>();
+                        let burning: PlotPoints = stats
+                            .burning_trees_over_time
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &v)| [i as f64, v])
+                            .collect();
+                        let ashes: PlotPoints = stats
+                            .ashes_over_time
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &v)| [i as f64, v])
+                            .collect();
+                        plot_ui.line(Line::new(all_trees).name("Total Trees"));
+                        plot_ui.line(Line::new(burning).name("Burning Trees"));
+                        plot_ui.line(Line::new(ashes).name("Tree Ashes"));
+                    });
+
+                ui.separator();
+                ui.label("Grass Status Over Time");
+                Plot::new("Grasses")
+                    .legend(Legend::default())
+                    .height(200.0)
+                    .width(ui.available_width())
+                    .show(ui, |plot_ui| {
+                        let grasses: PlotPoints = stats
+                            .grasses_over_time
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &v)| [i as f64, v])
+                            .collect();
+                        let ashes: PlotPoints = stats
+                            .ashes_over_time
+                            .iter()
+                            .enumerate()
+                            .map(|(i, &v)| [i as f64, v])
+                            .collect();
+                        plot_ui.line(Line::new(grasses).name("Grasses"));
+                        plot_ui.line(Line::new(ashes).name("Grass Ashes"));
+                    });
+            });
     }
 }
 
