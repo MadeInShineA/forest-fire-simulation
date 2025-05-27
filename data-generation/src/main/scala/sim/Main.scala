@@ -39,7 +39,7 @@ object Main extends App {
   val grid = new Grid(width, height)
     .igniteRandomFires(onFireTreesPercent, onFireGrassPercent)
 
-  val steps = (1 to numberOfSteps).scanLeft(grid) { (g, _) =>
+  val steps = (1 until numberOfSteps).scanLeft(grid) { (g, _) =>
     g.nextStep()
   }
 

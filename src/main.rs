@@ -1,7 +1,3 @@
-// --- Forest Fire Simulation with Speed & Frame Slider ---
-// Fully corrected main.rs (Bevy 0.13)
-// Compile‑tested: balanced braces, frame starts at 1, graphs slice to current frame
-
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
@@ -362,26 +358,37 @@ fn check_simulation_ready_system(
     mut commands: Commands,
     mut loading: ResMut<LoadingScreen>,
     mut pending: ResMut<PendingSimulation>,
+    mut playback: ResMut<PlaybackControl>,
 ) {
     if !loading.0 {
         return;
     }
-    let data_opt = pending.result.lock().unwrap().clone();
+
+    // Scope the immutable borrow of pending.result so it ends before we do `*pending = …`
+    let data_opt = {
+        let guard = pending.result.lock().unwrap();
+        guard.clone()
+    };
+
     if let Some(data) = data_opt {
-        // Stats length equals number of frames
         let total_frames = data.steps.len();
         commands.insert_resource(SimulationStats::new(total_frames));
-        // Extract steps to avoid double-move
         let frames = data.steps;
-        // Start at frame 1 (unless only 1 frame)
-        let start_frame = 1.min(total_frames - 1);
+
+        // start at index 0
+        let start_frame = 0;
         commands.insert_resource(Simulation {
             frames,
             current: start_frame,
             width: data.width,
             height: data.height,
         });
+
         spawn_camera(&mut commands);
+
+        playback.paused = true;
+        playback.jump_to_frame = Some(start_frame);
+
         loading.0 = false;
         *pending = PendingSimulation::default();
     }
@@ -393,82 +400,81 @@ fn advance_frame_system(
     mut commands: Commands,
     time: Res<Time>,
     mut timer: ResMut<FrameTimer>,
-    mut sim_opt: Option<ResMut<Simulation>>,
+    mut sim: Option<ResMut<Simulation>>,
     mut playback: ResMut<PlaybackControl>,
     cells: Query<Entity, With<CellEntity>>,
     cache: Res<CachedAssets>,
     mut stats: ResMut<SimulationStats>,
 ) {
-    let mut sim = match sim_opt {
+    let mut sim = match sim.as_mut() {
         Some(s) => s,
         None => return,
     };
-    // adjust timer to speed
+
+    // 1) update timer to match speed slider
     if timer.0.duration().as_secs_f32() != playback.speed {
         timer
             .0
             .set_duration(std::time::Duration::from_secs_f32(playback.speed));
     }
-    // early‑exit if paused and no step
+
+    // 2) bail if paused + no explicit step/jump
     if playback.paused
-        && playback.step_forward == false
-        && playback.step_back == false
-        && playback.go_to_start == false
-        && playback.go_to_end == false
-        && playback.jump_to_frame.is_none()
-    {
-        return;
-    }
-    if !timer.0.tick(time.delta()).just_finished()
-        && playback.jump_to_frame.is_none()
         && !playback.step_forward
         && !playback.step_back
-        && !playback.go_to_start
-        && !playback.go_to_end
+        && playback.jump_to_frame.is_none()
     {
         return;
     }
 
-    // save previous
-    let prev_idx = sim.current;
+    // 3) require either a timer tick or an explicit step/jump
+    let ticked = timer.0.tick(time.delta()).just_finished();
+    if !ticked && playback.jump_to_frame.is_none() && !playback.step_forward && !playback.step_back
+    {
+        return;
+    }
 
-    // navigation
-    if let Some(f) = playback.jump_to_frame.take() {
-        sim.current = f.min(sim.frames.len() - 1);
-    } else if playback.go_to_start {
-        sim.current = 1.min(sim.frames.len() - 1);
-        playback.go_to_start = false;
-    } else if playback.go_to_end {
-        sim.current = sim.frames.len() - 1;
-        playback.go_to_end = false;
+    // save old index for stats
+    let prev = sim.current;
+    let last = sim.frames.len() - 1;
+
+    // 4) decide the next index
+    let mut next = sim.current;
+    if let Some(jump) = playback.jump_to_frame.take() {
+        next = jump.min(last);
     } else if playback.step_back {
-        if sim.current > 1 {
-            sim.current -= 1;
+        if next > 0 {
+            next -= 1;
         }
         playback.step_back = false;
+    } else if playback.step_forward {
+        next = (next + 1).min(last);
+        playback.step_forward = false;
+    } else if !playback.paused && ticked {
+        if next < last {
+            next += 1;
+        } else {
+            // wrap-around at end
+            next = 0;
+            playback.paused = true;
+        }
     }
 
-    // despawn old
-    for e in cells.iter() {
-        commands.entity(e).despawn_recursive();
+    sim.current = next;
+
+    // 5) despawn old frame
+    for ent in cells.iter() {
+        commands.entity(ent).despawn_recursive();
     }
 
-    // render grid
+    // 6) render the new current frame
     let grid = &sim.frames[sim.current];
     let cell_size = 10.0;
     let spacing = 1.5;
     let offset_x = -(sim.width as f32 * cell_size * spacing) / 2.0;
     let offset_z = -(sim.height as f32 * cell_size * spacing) / 2.0;
 
-    let (
-        mut trees,
-        mut burning_trees,
-        mut tree_ashes,
-        mut grasses,
-        mut burning_grasses,
-        mut grass_ashes,
-    ) = (0, 0, 0, 0, 0, 0);
-
+    let (mut t, mut bt, mut ta, mut g, mut bg, mut ga) = (0, 0, 0, 0, 0, 0);
     for (y, row) in grid.iter().enumerate() {
         for (x, cell) in row.iter().enumerate() {
             let pos = Vec3::new(
@@ -479,9 +485,9 @@ fn advance_frame_system(
             match cell.as_str() {
                 "T" | "*" => {
                     if cell == "*" {
-                        burning_trees += 1
+                        bt += 1
                     } else {
-                        trees += 1
+                        t += 1
                     }
                     spawn_cell(&mut commands, &cache, "trunk", pos + Vec3::Y * 2.0);
                     spawn_cell(
@@ -497,11 +503,11 @@ fn advance_frame_system(
                 }
                 other => {
                     match other {
-                        "G" => grasses += 1,
-                        "A" => tree_ashes += 1,
-                        "+" => burning_grasses += 1,
-                        "-" => grass_ashes += 1,
-                        _ => tree_ashes += 1,
+                        "G" => g += 1,
+                        "A" => ta += 1,
+                        "+" => bg += 1,
+                        "-" => ga += 1,
+                        _ => ta += 1,
                     }
                     spawn_cell(
                         &mut commands,
@@ -514,29 +520,9 @@ fn advance_frame_system(
         }
     }
 
-    // update stats
-    let start_fill = prev_idx.min(sim.current);
-    update_stats(
-        &mut stats,
-        start_fill,
-        sim.current,
-        trees,
-        burning_trees,
-        tree_ashes,
-        grasses,
-        burning_grasses,
-        grass_ashes,
-    );
-
-    // auto advance when playing
-    if playback.step_forward {
-        sim.current = (sim.current + 1).min(sim.frames.len() - 1);
-        playback.step_forward = false;
-    } else if !playback.paused {
-        sim.current = ((sim.current + 1).max(1)) % sim.frames.len();
-        if sim.current == 0 {
-            sim.current = 1;
-        }
+    // 7) update stats only on forward motion within bounds
+    if sim.current > prev {
+        update_stats(&mut stats, prev, sim.current, t, bt, ta, g, bg, ga);
     }
 }
 
@@ -600,7 +586,7 @@ fn ui_system(
     let sim_ref = sim.as_ref().map(|r| &**r);
     let ctx = contexts.ctx_mut();
 
-    // loading overlay
+    // ─────── Loading overlay ─────────────────────────────────────
     if loading.0 {
         text_timer.timer.tick(time.delta());
         if text_timer.timer.just_finished() {
@@ -616,131 +602,134 @@ fn ui_system(
         return;
     }
 
-    // control window
-    egui::Window::new("Simulation Controls").show(ctx, |ui| {
-        ui.add(egui::Slider::new(&mut params.width, 10..=100).text("Width"));
-        ui.add(egui::Slider::new(&mut params.height, 10..=100).text("Height"));
-        ui.add(egui::Slider::new(&mut params.burning_trees, 0..=100).text("Burning trees %"));
-        ui.add(egui::Slider::new(&mut params.burning_grasses, 0..=100).text("Burning grasses %"));
-        ui.add(egui::Slider::new(&mut params.number_of_steps, 1..=100).text("Number of steps"));
-        if ui.button("Start Simulation").clicked() {
-            params.trigger_simulation = true;
-        }
-
-        if let Some(sim) = sim_ref {
+    // ─────── Side panel with controls ────────────────────────────
+    egui::SidePanel::left("side_panel")
+        .resizable(true)
+        .min_width(200.0)
+        .show(ctx, |ui| {
+            ui.heading("Simulation Controls");
             ui.separator();
-            ui.label("Playback Controls:");
-            ui.horizontal(|ui| {
-                if ui.button("|⏮ First").clicked() {
-                    playback.go_to_start = true;
-                }
-                if ui.button("⏮ Back").clicked() {
-                    playback.step_back = true;
-                }
-                if ui
-                    .button(if playback.paused {
-                        "▶ Resume"
-                    } else {
-                        "⏸ Pause"
-                    })
-                    .clicked()
-                {
-                    playback.paused = !playback.paused;
-                }
-                if ui.button("⏭ Forward").clicked() {
-                    playback.step_forward = true;
-                }
-                if ui.button("Last ⏭").clicked() {
-                    playback.go_to_end = true;
-                }
-            });
-            ui.add(egui::Slider::new(&mut playback.speed, 0.05..=2.0).text("Speed (s/frame)"));
-            let mut frame_val = sim.current;
-            if ui
-                .add(egui::Slider::new(&mut frame_val, 1..=sim.frames.len() - 1).text("Frame"))
-                .changed()
-            {
-                playback.jump_to_frame = Some(frame_val);
+
+            // Parameter sliders
+            ui.add(egui::Slider::new(&mut params.width, 10..=100).text("Width"));
+            ui.add(egui::Slider::new(&mut params.height, 10..=100).text("Height"));
+            ui.add(egui::Slider::new(&mut params.burning_trees, 0..=100).text("Burning trees %"));
+            ui.add(
+                egui::Slider::new(&mut params.burning_grasses, 0..=100).text("Burning grasses %"),
+            );
+            ui.add(egui::Slider::new(&mut params.number_of_steps, 1..=100).text("Number of steps"));
+            if ui.button("Start Simulation").clicked() {
+                params.trigger_simulation = true;
             }
-        }
-    });
 
-    // step indicator + graphs
-    if let Some(sim) = sim_ref {
-        egui::TopBottomPanel::top("step_panel").show(ctx, |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.label(format!("Step {}/{}", sim.current, sim.frames.len() - 1));
-            });
-        });
-        egui::Window::new("Simulation Graphs")
-            .resizable(true)
-            .show(ctx, |ui| {
-                ui.label("Tree Status Over Time");
-                Plot::new("Trees")
-                    .legend(Legend::default())
-                    .height(200.0)
-                    .show(ui, |plot_ui| {
-                        let trees: PlotPoints = stats
-                            .trees_over_time
-                            .iter()
-                            .take(sim.current + 1)
-                            .enumerate()
-                            .map(|(i, &v)| [i as f64, v as f64])
-                            .collect();
-                        let burning: PlotPoints = stats
-                            .burning_trees_over_time
-                            .iter()
-                            .take(sim.current + 1)
-                            .enumerate()
-                            .map(|(i, &v)| [i as f64, v as f64])
-                            .collect();
-                        let ashes: PlotPoints = stats
-                            .tree_ashes_over_time
-                            .iter()
-                            .take(sim.current + 1)
-                            .enumerate()
-                            .map(|(i, &v)| [i as f64, v as f64])
-                            .collect();
-                        plot_ui.line(Line::new(trees).name("Trees"));
-                        plot_ui.line(Line::new(burning).name("Burning Trees"));
-                        plot_ui.line(Line::new(ashes).name("Tree Ashes"));
-                    });
+            if let Some(sim) = sim_ref {
                 ui.separator();
-                ui.label("Grass Status Over Time");
-                Plot::new("Grasses")
-                    .legend(Legend::default())
-                    .height(200.0)
-                    .show(ui, |plot_ui| {
-                        let grasses: PlotPoints = stats
-                            .grasses_over_time
-                            .iter()
-                            .take(sim.current + 1)
-                            .enumerate()
-                            .map(|(i, &v)| [i as f64, v as f64])
-                            .collect();
-                        let burning: PlotPoints = stats
-                            .burning_grasses_over_time
-                            .iter()
-                            .take(sim.current + 1)
-                            .enumerate()
-                            .map(|(i, &v)| [i as f64, v as f64])
-                            .collect();
-                        let ashes: PlotPoints = stats
-                            .grass_ashes_over_time
-                            .iter()
-                            .take(sim.current + 1)
-                            .enumerate()
-                            .map(|(i, &v)| [i as f64, v as f64])
-                            .collect();
-                        plot_ui.line(Line::new(grasses).name("Grasses"));
-                        plot_ui.line(Line::new(burning).name("Burning Grasses"));
-                        plot_ui.line(Line::new(ashes).name("Grass Ashes"));
-                    });
-            });
-    }
-}
+                ui.label("Playback Controls");
+                ui.horizontal(|ui| {
+                    // go-to-start (reset)
+                    if ui.small_button("|⏮").clicked() {
+                        playback.jump_to_frame = Some(0);
+                        playback.paused = true;
+                    }
+                    if ui.small_button("⏮").clicked() {
+                        playback.step_back = true;
+                    }
+                    if ui
+                        .small_button(if playback.paused { "▶" } else { "⏸" })
+                        .clicked()
+                    {
+                        playback.paused = !playback.paused;
+                    }
+                    if ui.small_button("⏭").clicked() {
+                        playback.step_forward = true;
+                    }
+                    if ui.small_button("⏭|").clicked() {
+                        playback.jump_to_frame = Some(sim.frames.len() - 1);
+                    }
+                });
 
-// ────────────────── Load simulation JSON ─────────────────────────────
+                ui.add(egui::Slider::new(&mut playback.speed, 0.05..=2.0).text("Speed s/frame"));
+
+                // Frame slider
+                ui.label(format!("Frame: {}/{}", sim.current + 1, sim.frames.len()));
+                let mut display_frame = sim.current + 1;
+                if ui
+                    .add(egui::Slider::new(&mut display_frame, 1..=sim.frames.len()).text("Frame"))
+                    .changed()
+                {
+                    playback.jump_to_frame = Some(display_frame - 1);
+                }
+
+                ui.separator();
+
+                // ─────── Graphs ────────────────────────────────────────
+                ui.collapsing("Graphs", |ui| {
+                    ui.label("Tree Status");
+                    Plot::new("Trees")
+                        .legend(Legend::default())
+                        .height(120.0)
+                        .show(ui, |plot_ui| {
+                            let trees: PlotPoints = stats
+                                .trees_over_time
+                                .iter()
+                                .take(sim.current + 1)
+                                .enumerate()
+                                .map(|(i, &v)| [i as f64, v as f64])
+                                .collect();
+                            let burning: PlotPoints = stats
+                                .burning_trees_over_time
+                                .iter()
+                                .take(sim.current + 1)
+                                .enumerate()
+                                .map(|(i, &v)| [i as f64, v as f64])
+                                .collect();
+                            let ashes: PlotPoints = stats
+                                .tree_ashes_over_time
+                                .iter()
+                                .take(sim.current + 1)
+                                .enumerate()
+                                .map(|(i, &v)| [i as f64, v as f64])
+                                .collect();
+                            plot_ui.line(Line::new(trees).name("Trees"));
+                            plot_ui.line(Line::new(burning).name("Burning"));
+                            plot_ui.line(Line::new(ashes).name("Ashes"));
+                        });
+
+                    ui.separator();
+                    ui.label("Grass Status");
+                    Plot::new("Grasses")
+                        .legend(Legend::default())
+                        .height(120.0)
+                        .show(ui, |plot_ui| {
+                            let grasses: PlotPoints = stats
+                                .grasses_over_time
+                                .iter()
+                                .take(sim.current + 1)
+                                .enumerate()
+                                .map(|(i, &v)| [i as f64, v as f64])
+                                .collect();
+                            let burning: PlotPoints = stats
+                                .burning_grasses_over_time
+                                .iter()
+                                .take(sim.current + 1)
+                                .enumerate()
+                                .map(|(i, &v)| [i as f64, v as f64])
+                                .collect();
+                            let ashes: PlotPoints = stats
+                                .grass_ashes_over_time
+                                .iter()
+                                .take(sim.current + 1)
+                                .enumerate()
+                                .map(|(i, &v)| [i as f64, v as f64])
+                                .collect();
+                            plot_ui.line(Line::new(grasses).name("Grass"));
+                            plot_ui.line(Line::new(burning).name("Burning"));
+                            plot_ui.line(Line::new(ashes).name("Ashes"));
+                        });
+                });
+            }
+        });
+}
 
 fn load_simulation_data() -> Option<GridData> {
     let file = File::open("assets/simulation.json").ok()?;
