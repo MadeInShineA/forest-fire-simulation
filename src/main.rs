@@ -1,3 +1,5 @@
+use bevy::input::mouse::{MouseMotion, MouseWheel};
+use bevy::input::ButtonInput;
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
@@ -103,6 +105,9 @@ struct LoadingTextTimer {
     dot_count: usize,
 }
 
+#[derive(Component)]
+struct FlyCamera;
+
 // ───────────────────────────── App entry ────────────────────────────────
 
 fn main() {
@@ -149,7 +154,70 @@ fn main() {
                 advance_frame_system,
             ),
         )
+        .add_systems(Update, camera_movement_system)
         .run();
+}
+
+fn camera_movement_system(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    mut mouse_motion_events: EventReader<MouseMotion>,
+    mut scroll: EventReader<MouseWheel>,
+    mut query: Query<&mut Transform, With<FlyCamera>>,
+) {
+    let mut transform = match query.get_single_mut() {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
+    // ─────── Movement ───────
+    let mut direction = Vec3::ZERO;
+    let forward: Vec3 = transform.forward().into();
+    let right: Vec3 = transform.right().into();
+    let up = Vec3::Y;
+
+    let speed = 200.0 * time.delta_seconds();
+
+    if keys.pressed(KeyCode::KeyW) {
+        direction += forward;
+    }
+    if keys.pressed(KeyCode::KeyS) {
+        direction -= forward;
+    }
+    if keys.pressed(KeyCode::KeyA) {
+        direction -= right;
+    }
+    if keys.pressed(KeyCode::KeyD) {
+        direction += right;
+    }
+    if keys.pressed(KeyCode::KeyE) {
+        direction += up;
+    }
+    if keys.pressed(KeyCode::KeyQ) {
+        direction -= up;
+    }
+
+    transform.translation += direction * speed;
+
+    for ev in scroll.read() {
+        transform.translation += forward * ev.y * 20.0;
+    }
+
+    // ─────── Rotation ───────
+    if buttons.pressed(MouseButton::Left) {
+        let mut delta = Vec2::ZERO;
+        for ev in mouse_motion_events.read() {
+            delta += ev.delta;
+        }
+
+        if delta.length_squared() > 0.0 {
+            let yaw = Quat::from_rotation_y(-delta.x * 0.002);
+            let pitch = Quat::from_rotation_x(-delta.y * 0.002);
+            transform.rotation = yaw * transform.rotation; // yaw around global Y
+            transform.rotation = transform.rotation * pitch; // pitch around local X
+        }
+    }
 }
 
 // ───────────────────────────── Asset setup ─────────────────────────────
@@ -311,16 +379,16 @@ fn start_simulation_button_system(
 // ───────────────────────── Spawn camera & lights ─────────────────────────
 
 fn spawn_camera(commands: &mut Commands) {
-    // Camera
     commands.spawn((
         Camera3dBundle {
             transform: Transform::from_xyz(0.0, 250.0, 400.0).looking_at(Vec3::ZERO, Vec3::Y),
             ..default()
         },
         MainCamera,
+        FlyCamera,
         SimulationEntity,
     ));
-    // Disable shadows to reduce GPU memory usage
+
     commands.spawn((
         DirectionalLightBundle {
             transform: Transform::from_xyz(0.0, 200.0, 100.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -333,6 +401,7 @@ fn spawn_camera(commands: &mut Commands) {
         },
         SimulationEntity,
     ));
+
     commands.spawn((
         PointLightBundle {
             transform: Transform::from_xyz(100.0, 150.0, 100.0),
@@ -346,6 +415,7 @@ fn spawn_camera(commands: &mut Commands) {
         },
         SimulationEntity,
     ));
+
     commands.insert_resource(AmbientLight {
         color: Color::WHITE,
         brightness: 0.2,
