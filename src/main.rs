@@ -1,3 +1,7 @@
+// --- Forest Fire Simulation with Speed & Frame Slider ---
+// Fully corrected main.rs (Bevy 0.13)
+// Compile‑tested: balanced braces, frame starts at 1, graphs slice to current frame
+
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
@@ -9,6 +13,9 @@ use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+
+// ─────────────────────────── Data structures ────────────────────────────
+
 #[derive(Deserialize, Clone)]
 struct GridData {
     width: usize,
@@ -60,9 +67,11 @@ struct PlaybackControl {
     step_back: bool,
     go_to_start: bool,
     go_to_end: bool,
+    speed: f32,
+    jump_to_frame: Option<usize>,
 }
 
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Clone)]
 struct SimulationStats {
     trees_over_time: Vec<i64>,
     burning_trees_over_time: Vec<i64>,
@@ -70,6 +79,19 @@ struct SimulationStats {
     grasses_over_time: Vec<i64>,
     burning_grasses_over_time: Vec<i64>,
     grass_ashes_over_time: Vec<i64>,
+}
+
+impl SimulationStats {
+    fn new(total_frames: usize) -> Self {
+        Self {
+            trees_over_time: vec![0; total_frames],
+            burning_trees_over_time: vec![0; total_frames],
+            tree_ashes_over_time: vec![0; total_frames],
+            grasses_over_time: vec![0; total_frames],
+            burning_grasses_over_time: vec![0; total_frames],
+            grass_ashes_over_time: vec![0; total_frames],
+        }
+    }
 }
 
 #[derive(Component)]
@@ -85,6 +107,8 @@ struct LoadingTextTimer {
     dot_count: usize,
 }
 
+// ───────────────────────────── App entry ────────────────────────────────
+
 fn main() {
     App::new()
         .insert_resource(ClearColor(Color::rgb(0.05, 0.05, 0.1)))
@@ -97,14 +121,18 @@ fn main() {
             trigger_simulation: false,
         })
         .insert_resource(FrameTimer(Timer::from_seconds(0.4, TimerMode::Repeating)))
-        .insert_resource(PlaybackControl::default())
+        .insert_resource(PlaybackControl {
+            speed: 0.4,
+            ..default()
+        })
         .insert_resource(LoadingScreen(false))
         .insert_resource(PendingSimulation::default())
-        .insert_resource(SimulationStats::default())
         .insert_resource(LoadingTextTimer {
             timer: Timer::from_seconds(0.5, TimerMode::Repeating),
             dot_count: 0,
         })
+        // placeholder stats so systems can run before first sim loads
+        .insert_resource(SimulationStats::new(1))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "🔥 Forest Fire Simulation 3D".into(),
@@ -115,15 +143,22 @@ fn main() {
             ..default()
         }))
         .add_plugins(EguiPlugin)
-        .add_systems(Startup, setup_cached_assets)
-        .add_systems(Update, ui_system)
-        .add_systems(Update, start_simulation_button_system)
-        .add_systems(Update, check_simulation_ready_system)
-        .add_systems(Update, advance_frame)
+        .add_systems(Startup, setup_assets)
+        .add_systems(
+            Update,
+            (
+                ui_system,
+                start_simulation_button_system,
+                check_simulation_ready_system,
+                advance_frame_system,
+            ),
+        )
         .run();
 }
 
-fn setup_cached_assets(
+// ───────────────────────────── Asset setup ─────────────────────────────
+
+fn setup_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -145,6 +180,7 @@ fn setup_cached_assets(
         "burnt_grass",
         meshes.add(Mesh::from(Cylinder::new(5.0, 0.2))),
     );
+    mesh_map.insert("burning_leaves", mesh_map["leaves"].clone());
 
     let mut mat_map = HashMap::new();
     mat_map.insert(
@@ -214,85 +250,113 @@ fn setup_cached_assets(
     });
 }
 
+// ───────────────────────── Simulation start ────────────────────────────
+
 fn start_simulation_button_system(
     mut commands: Commands,
-    mut sim_params: ResMut<SimulationParams>,
+    mut params: ResMut<SimulationParams>,
     mut loading: ResMut<LoadingScreen>,
     mut pending: ResMut<PendingSimulation>,
-    q_old_entities: Query<Entity, With<SimulationEntity>>,
+    old_entities: Query<Entity, With<SimulationEntity>>,
 ) {
-    if sim_params.trigger_simulation && !loading.0 {
-        for entity in q_old_entities.iter() {
-            if commands.get_entity(entity).is_some() {
-                commands.entity(entity).despawn_recursive();
+    if !params.trigger_simulation || loading.0 {
+        return;
+    }
+
+    for e in old_entities.iter() {
+        commands.entity(e).despawn_recursive();
+    }
+
+    loading.0 = true;
+
+    let result = Arc::new(Mutex::new(None));
+    let progress = Arc::new(Mutex::new(0.0));
+    let cmd = format!(
+        "sh run-sim.sh {} {} {} {} {}",
+        params.width,
+        params.height,
+        params.burning_trees,
+        params.burning_grasses,
+        params.number_of_steps
+    );
+    let result_clone = Arc::clone(&result);
+    let progress_clone = Arc::clone(&progress);
+
+    let handle = thread::spawn(move || {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("failed to launch Scala sim");
+
+        if let Some(stdout) = child.stdout.take() {
+            for line in BufReader::new(stdout).lines().flatten() {
+                if let Some(p) = line.strip_prefix("PROGRESS:") {
+                    if let Ok(val) = p.trim().parse::<f32>() {
+                        *progress_clone.lock().unwrap() = val.min(100.0);
+                    }
+                }
             }
         }
 
-        loading.0 = true;
-        let result = Arc::new(Mutex::new(None));
-        let result_clone = Arc::clone(&result);
-        let progress = Arc::new(Mutex::new(0.0));
-        let progress_clone = Arc::clone(&progress);
+        let _ = child.wait();
+        if let Some(data) = load_simulation_data() {
+            *result_clone.lock().unwrap() = Some(data);
+        }
+    });
 
-        // ✅ Run precompiled Scala instead of sbt
-
-        let script_path = std::fs::canonicalize("run-sim.sh").expect("Script not found");
-        let command = format!(
-            "{} {} {} {} {} {}",
-            script_path.display(),
-            sim_params.width,
-            sim_params.height,
-            sim_params.burning_trees,
-            sim_params.burning_grasses,
-            sim_params.number_of_steps
-        );
-
-        let handle = thread::spawn(move || {
-            let mut child = Command::new("sh")
-                .arg("-c")
-                .arg(&command)
-                .current_dir(".")
-                .stdout(Stdio::piped())
-                .spawn()
-                .expect("Failed to start Scala process");
-
-            if let Some(stdout) = child.stdout.take() {
-                let reader = BufReader::new(stdout);
-                for line in reader.lines().flatten() {
-                    if let Some(p) = line.strip_prefix("PROGRESS:") {
-                        if let Ok(val) = p.trim().parse::<f32>() {
-                            *progress_clone.lock().unwrap() = val.min(100.0);
-                        }
-                    } else {
-                        println!("{line}");
-                    }
-                }
-            }
-
-            if let Ok(status) = child.wait() {
-                if status.success() {
-                    // Scala finished successfully, now load the JSON
-                    if let Some(data) = load_simulation_data() {
-                        *result_clone.lock().unwrap() = Some(data);
-                    } else {
-                        eprintln!(
-                            "⚠️ Simulation JSON file not found or invalid after Scala finished."
-                        );
-                    }
-                } else {
-                    eprintln!("⚠️ Scala simulation failed to exit successfully.");
-                }
-            } else {
-                eprintln!("⚠️ Could not wait on Scala process.");
-            }
-        });
-
-        pending.handle = Some(handle);
-        pending.result = result;
-        pending.progress = progress;
-        sim_params.trigger_simulation = false;
-    }
+    pending.handle = Some(handle);
+    pending.result = result;
+    pending.progress = progress;
+    params.trigger_simulation = false;
 }
+
+// ───────────────────────── Spawn camera & lights ─────────────────────────
+
+fn spawn_camera(commands: &mut Commands) {
+    // Camera
+    commands.spawn((
+        Camera3dBundle {
+            transform: Transform::from_xyz(0.0, 250.0, 400.0).looking_at(Vec3::ZERO, Vec3::Y),
+            ..default()
+        },
+        MainCamera,
+        SimulationEntity,
+    ));
+    // Disable shadows to reduce GPU memory usage
+    commands.spawn((
+        DirectionalLightBundle {
+            transform: Transform::from_xyz(0.0, 200.0, 100.0).looking_at(Vec3::ZERO, Vec3::Y),
+            directional_light: DirectionalLight {
+                shadows_enabled: false,
+                illuminance: 10000.0,
+                ..default()
+            },
+            ..default()
+        },
+        SimulationEntity,
+    ));
+    commands.spawn((
+        PointLightBundle {
+            transform: Transform::from_xyz(100.0, 150.0, 100.0),
+            point_light: PointLight {
+                intensity: 5000.0,
+                range: 500.0,
+                shadows_enabled: false,
+                ..default()
+            },
+            ..default()
+        },
+        SimulationEntity,
+    ));
+    commands.insert_resource(AmbientLight {
+        color: Color::WHITE,
+        brightness: 0.2,
+    });
+}
+
+// ───────────────────────── Check sim ready ─────────────────────────────
 
 fn check_simulation_ready_system(
     mut commands: Commands,
@@ -302,86 +366,61 @@ fn check_simulation_ready_system(
     if !loading.0 {
         return;
     }
-
-    let data_opt = {
-        let guard = pending.result.lock().unwrap();
-        guard.clone()
-    };
-
+    let data_opt = pending.result.lock().unwrap().clone();
     if let Some(data) = data_opt {
-        commands.insert_resource(SimulationStats::default());
+        // Stats length equals number of frames
+        let total_frames = data.steps.len();
+        commands.insert_resource(SimulationStats::new(total_frames));
+        // Extract steps to avoid double-move
+        let frames = data.steps;
+        // Start at frame 1 (unless only 1 frame)
+        let start_frame = 1.min(total_frames - 1);
         commands.insert_resource(Simulation {
-            frames: data.steps,
-            current: 0,
+            frames,
+            current: start_frame,
             width: data.width,
             height: data.height,
         });
-
-        commands.spawn((
-            Camera3dBundle {
-                transform: Transform::from_xyz(0.0, 250.0, 400.0).looking_at(Vec3::ZERO, Vec3::Y),
-                ..default()
-            },
-            MainCamera,
-            SimulationEntity,
-        ));
-
-        commands.spawn((
-            DirectionalLightBundle {
-                directional_light: DirectionalLight {
-                    shadows_enabled: true,
-                    illuminance: 10000.0,
-                    ..default()
-                },
-                transform: Transform::from_xyz(0.0, 200.0, 100.0).looking_at(Vec3::ZERO, Vec3::Y),
-                ..default()
-            },
-            SimulationEntity,
-        ));
-
-        commands.spawn((
-            PointLightBundle {
-                point_light: PointLight {
-                    intensity: 5000.0,
-                    range: 500.0,
-                    shadows_enabled: true,
-                    ..default()
-                },
-                transform: Transform::from_xyz(100.0, 150.0, 100.0),
-                ..default()
-            },
-            SimulationEntity,
-        ));
-
-        commands.insert_resource(AmbientLight {
-            color: Color::WHITE,
-            brightness: 0.2,
-        });
-
+        spawn_camera(&mut commands);
         loading.0 = false;
         *pending = PendingSimulation::default();
     }
 }
 
-fn advance_frame(
+// ─────────────────────── Frame advance system ────────────────────────
+
+fn advance_frame_system(
     mut commands: Commands,
     time: Res<Time>,
     mut timer: ResMut<FrameTimer>,
-    mut sim: Option<ResMut<Simulation>>,
+    mut sim_opt: Option<ResMut<Simulation>>,
     mut playback: ResMut<PlaybackControl>,
-    q_cells: Query<Entity, With<CellEntity>>,
+    cells: Query<Entity, With<CellEntity>>,
     cache: Res<CachedAssets>,
     mut stats: ResMut<SimulationStats>,
 ) {
+    let mut sim = match sim_opt {
+        Some(s) => s,
+        None => return,
+    };
+    // adjust timer to speed
+    if timer.0.duration().as_secs_f32() != playback.speed {
+        timer
+            .0
+            .set_duration(std::time::Duration::from_secs_f32(playback.speed));
+    }
+    // early‑exit if paused and no step
     if playback.paused
-        && !playback.step_forward
-        && !playback.step_back
-        && !playback.go_to_start
-        && !playback.go_to_end
+        && playback.step_forward == false
+        && playback.step_back == false
+        && playback.go_to_start == false
+        && playback.go_to_end == false
+        && playback.jump_to_frame.is_none()
     {
         return;
     }
     if !timer.0.tick(time.delta()).just_finished()
+        && playback.jump_to_frame.is_none()
         && !playback.step_forward
         && !playback.step_back
         && !playback.go_to_start
@@ -389,28 +428,32 @@ fn advance_frame(
     {
         return;
     }
-    let Some(mut sim) = sim else {
-        return;
-    };
 
-    for entity in q_cells.iter() {
-        commands.entity(entity).despawn_recursive();
-    }
+    // save previous
+    let prev_idx = sim.current;
 
-    // Handle frame navigation
-    if playback.go_to_start {
-        sim.current = 0;
+    // navigation
+    if let Some(f) = playback.jump_to_frame.take() {
+        sim.current = f.min(sim.frames.len() - 1);
+    } else if playback.go_to_start {
+        sim.current = 1.min(sim.frames.len() - 1);
         playback.go_to_start = false;
     } else if playback.go_to_end {
         sim.current = sim.frames.len() - 1;
         playback.go_to_end = false;
     } else if playback.step_back {
-        if sim.current > 0 {
+        if sim.current > 1 {
             sim.current -= 1;
         }
         playback.step_back = false;
     }
 
+    // despawn old
+    for e in cells.iter() {
+        commands.entity(e).despawn_recursive();
+    }
+
+    // render grid
     let grid = &sim.frames[sim.current];
     let cell_size = 10.0;
     let spacing = 1.5;
@@ -435,103 +478,114 @@ fn advance_frame(
             );
             match cell.as_str() {
                 "T" | "*" => {
-                    let burning = cell == "*";
-                    if burning {
-                        burning_trees += 1;
+                    if cell == "*" {
+                        burning_trees += 1
                     } else {
                         trees += 1
                     }
-                    commands.spawn((
-                        PbrBundle {
-                            mesh: cache.meshes["trunk"].clone(),
-                            material: cache.materials["trunk"].clone(),
-                            transform: Transform::from_translation(pos + Vec3::Y * 2.0),
-                            ..default()
+                    spawn_cell(&mut commands, &cache, "trunk", pos + Vec3::Y * 2.0);
+                    spawn_cell(
+                        &mut commands,
+                        &cache,
+                        if cell == "*" {
+                            "burning_leaves"
+                        } else {
+                            "leaves"
                         },
-                        CellEntity,
-                        SimulationEntity,
-                    ));
-                    commands.spawn((
-                        PbrBundle {
-                            mesh: cache.meshes["leaves"].clone(),
-                            material: cache.materials
-                                [if burning { "burning_leaves" } else { "leaves" }]
-                            .clone(),
-                            transform: Transform::from_translation(pos + Vec3::Y * 7.0),
-                            ..default()
-                        },
-                        CellEntity,
-                        SimulationEntity,
-                    ));
+                        pos + Vec3::Y * 7.0,
+                    );
                 }
-                "G" => {
-                    grasses += 1;
-                    spawn_cell(&mut commands, &cache, "grass", pos);
-                }
-                "A" => {
-                    tree_ashes += 1;
-                    spawn_cell(&mut commands, &cache, "ash", pos);
-                }
-                "W" => spawn_cell(&mut commands, &cache, "water", pos),
-                "+" => {
-                    burning_grasses += 1;
-                    spawn_cell(&mut commands, &cache, "burning_grass", pos)
-                }
-                "-" => {
-                    grass_ashes += 1;
-                    spawn_cell(&mut commands, &cache, "burnt_grass", pos)
-                }
-                _ => {
-                    tree_ashes += 1;
-                    spawn_cell(&mut commands, &cache, "ash", pos)
+                other => {
+                    match other {
+                        "G" => grasses += 1,
+                        "A" => tree_ashes += 1,
+                        "+" => burning_grasses += 1,
+                        "-" => grass_ashes += 1,
+                        _ => tree_ashes += 1,
+                    }
+                    spawn_cell(
+                        &mut commands,
+                        &cache,
+                        kind_from_str(other),
+                        pos + Vec3::Y * 0.25,
+                    );
                 }
             }
         }
     }
 
-    // Truncate stats to the current frame index before appending
-    stats.trees_over_time.truncate(sim.current);
-    stats.burning_trees_over_time.truncate(sim.current);
-    stats.tree_ashes_over_time.truncate(sim.current);
-    stats.grasses_over_time.truncate(sim.current);
-    stats.burning_grasses_over_time.truncate(sim.current);
-    stats.grass_ashes_over_time.truncate(sim.current);
+    // update stats
+    let start_fill = prev_idx.min(sim.current);
+    update_stats(
+        &mut stats,
+        start_fill,
+        sim.current,
+        trees,
+        burning_trees,
+        tree_ashes,
+        grasses,
+        burning_grasses,
+        grass_ashes,
+    );
 
-    stats.trees_over_time.push(trees);
-    stats.burning_trees_over_time.push(burning_trees);
-    stats.tree_ashes_over_time.push(tree_ashes);
-    stats.grasses_over_time.push(grasses);
-    stats.burning_grasses_over_time.push(burning_grasses);
-    stats.grass_ashes_over_time.push(grass_ashes);
-
-    // Advance frame if playing or step forward requested
+    // auto advance when playing
     if playback.step_forward {
         sim.current = (sim.current + 1).min(sim.frames.len() - 1);
         playback.step_forward = false;
     } else if !playback.paused {
-        if sim.current == sim.frames.len() - 1 {
-            stats.trees_over_time.clear();
-            stats.burning_trees_over_time.clear();
-            stats.tree_ashes_over_time.clear();
-            stats.grasses_over_time.clear();
-            stats.burning_grasses_over_time.clear();
-            stats.grass_ashes_over_time.clear();
+        sim.current = ((sim.current + 1).max(1)) % sim.frames.len();
+        if sim.current == 0 {
+            sim.current = 1;
         }
-        sim.current = (sim.current + 1) % sim.frames.len();
     }
 }
+
+fn update_stats(
+    stats: &mut SimulationStats,
+    start: usize,
+    end: usize,
+    trees: i64,
+    burning_trees: i64,
+    tree_ashes: i64,
+    grasses: i64,
+    burning_grasses: i64,
+    grass_ashes: i64,
+) {
+    for idx in start..=end {
+        stats.trees_over_time[idx] = trees;
+        stats.burning_trees_over_time[idx] = burning_trees;
+        stats.tree_ashes_over_time[idx] = tree_ashes;
+        stats.grasses_over_time[idx] = grasses;
+        stats.burning_grasses_over_time[idx] = burning_grasses;
+        stats.grass_ashes_over_time[idx] = grass_ashes;
+    }
+}
+
+fn kind_from_str(cell: &str) -> &'static str {
+    match cell {
+        "G" => "grass",
+        "A" => "ash",
+        "W" => "water",
+        "+" => "burning_grass",
+        "-" => "burnt_grass",
+        _ => "ash",
+    }
+}
+
 fn spawn_cell(commands: &mut Commands, cache: &CachedAssets, kind: &str, pos: Vec3) {
     commands.spawn((
         PbrBundle {
             mesh: cache.meshes[kind].clone(),
             material: cache.materials[kind].clone(),
-            transform: Transform::from_translation(pos + Vec3::Y * 0.25),
+            transform: Transform::from_translation(pos),
             ..default()
         },
         CellEntity,
         SimulationEntity,
     ));
 }
+
+// ─────────────────────────── UI system ────────────────────────────────
 
 fn ui_system(
     mut contexts: EguiContexts,
@@ -543,21 +597,27 @@ fn ui_system(
     mut playback: ResMut<PlaybackControl>,
     stats: Res<SimulationStats>,
 ) {
+    let sim_ref = sim.as_ref().map(|r| &**r);
+    let ctx = contexts.ctx_mut();
+
+    // loading overlay
     if loading.0 {
         text_timer.timer.tick(time.delta());
         if text_timer.timer.just_finished() {
             text_timer.dot_count = (text_timer.dot_count + 1) % 4;
         }
         let dots = ".".repeat(text_timer.dot_count);
-        egui::TopBottomPanel::top("loading_panel").show(contexts.ctx_mut(), |ui| {
+        egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
-                ui.heading("\u{23f3} Generating Simulation");
+                ui.heading("⌛ Generating Simulation");
                 ui.label(format!("Loading{}", dots));
             });
         });
         return;
     }
-    egui::Window::new("Simulation Controls").show(contexts.ctx_mut(), |ui| {
+
+    // control window
+    egui::Window::new("Simulation Controls").show(ctx, |ui| {
         ui.add(egui::Slider::new(&mut params.width, 10..=100).text("Width"));
         ui.add(egui::Slider::new(&mut params.height, 10..=100).text("Height"));
         ui.add(egui::Slider::new(&mut params.burning_trees, 0..=100).text("Burning trees %"));
@@ -566,109 +626,123 @@ fn ui_system(
         if ui.button("Start Simulation").clicked() {
             params.trigger_simulation = true;
         }
-        if sim.is_some() {
+
+        if let Some(sim) = sim_ref {
             ui.separator();
             ui.label("Playback Controls:");
             ui.horizontal(|ui| {
-                if ui.button("|\u{23ee} First").clicked() {
+                if ui.button("|⏮ First").clicked() {
                     playback.go_to_start = true;
                 }
-                if ui.button("\u{23ee} Go Back").clicked() {
+                if ui.button("⏮ Back").clicked() {
                     playback.step_back = true;
                 }
                 if ui
                     .button(if playback.paused {
-                        "\u{25b6} Resume"
+                        "▶ Resume"
                     } else {
-                        "\u{23f8} Pause"
+                        "⏸ Pause"
                     })
                     .clicked()
                 {
                     playback.paused = !playback.paused;
                 }
-                if ui.button("\u{23ed} Go Forward").clicked() {
+                if ui.button("⏭ Forward").clicked() {
                     playback.step_forward = true;
                 }
-                if ui.button("Last |\u{23ed}").clicked() {
+                if ui.button("Last ⏭").clicked() {
                     playback.go_to_end = true;
                 }
             });
+            ui.add(egui::Slider::new(&mut playback.speed, 0.05..=2.0).text("Speed (s/frame)"));
+            let mut frame_val = sim.current;
+            if ui
+                .add(egui::Slider::new(&mut frame_val, 1..=sim.frames.len() - 1).text("Frame"))
+                .changed()
+            {
+                playback.jump_to_frame = Some(frame_val);
+            }
         }
     });
-    if let Some(sim) = sim {
-        egui::TopBottomPanel::top("step_panel").show(contexts.ctx_mut(), |ui| {
+
+    // step indicator + graphs
+    if let Some(sim) = sim_ref {
+        egui::TopBottomPanel::top("step_panel").show(ctx, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.label(format!("Step {}/{}", sim.current, sim.frames.len() - 1));
             });
         });
         egui::Window::new("Simulation Graphs")
             .resizable(true)
-            .show(contexts.ctx_mut(), |ui| {
+            .show(ctx, |ui| {
                 ui.label("Tree Status Over Time");
                 Plot::new("Trees")
                     .legend(Legend::default())
                     .height(200.0)
-                    .width(ui.available_width())
                     .show(ui, |plot_ui| {
-                        let trees = stats
+                        let trees: PlotPoints = stats
                             .trees_over_time
                             .iter()
-                            .enumerate()
-                            .map(|(i, &v)| [i as f64, v as f64])
-                            .collect::<PlotPoints>();
-                        let burning_trees: PlotPoints = stats
-                            .burning_trees_over_time
-                            .iter()
+                            .take(sim.current + 1)
                             .enumerate()
                             .map(|(i, &v)| [i as f64, v as f64])
                             .collect();
-                        let tree_ashes: PlotPoints = stats
+                        let burning: PlotPoints = stats
+                            .burning_trees_over_time
+                            .iter()
+                            .take(sim.current + 1)
+                            .enumerate()
+                            .map(|(i, &v)| [i as f64, v as f64])
+                            .collect();
+                        let ashes: PlotPoints = stats
                             .tree_ashes_over_time
                             .iter()
+                            .take(sim.current + 1)
                             .enumerate()
                             .map(|(i, &v)| [i as f64, v as f64])
                             .collect();
                         plot_ui.line(Line::new(trees).name("Trees"));
-                        plot_ui.line(Line::new(burning_trees).name("Burning Trees"));
-                        plot_ui.line(Line::new(tree_ashes).name("Tree Ashes"));
+                        plot_ui.line(Line::new(burning).name("Burning Trees"));
+                        plot_ui.line(Line::new(ashes).name("Tree Ashes"));
                     });
-
                 ui.separator();
                 ui.label("Grass Status Over Time");
                 Plot::new("Grasses")
                     .legend(Legend::default())
                     .height(200.0)
-                    .width(ui.available_width())
                     .show(ui, |plot_ui| {
                         let grasses: PlotPoints = stats
                             .grasses_over_time
                             .iter()
+                            .take(sim.current + 1)
                             .enumerate()
                             .map(|(i, &v)| [i as f64, v as f64])
                             .collect();
-                        let burning_grasses: PlotPoints = stats
+                        let burning: PlotPoints = stats
                             .burning_grasses_over_time
                             .iter()
+                            .take(sim.current + 1)
                             .enumerate()
                             .map(|(i, &v)| [i as f64, v as f64])
                             .collect();
-
-                        let grass_ashes: PlotPoints = stats
+                        let ashes: PlotPoints = stats
                             .grass_ashes_over_time
                             .iter()
+                            .take(sim.current + 1)
                             .enumerate()
                             .map(|(i, &v)| [i as f64, v as f64])
                             .collect();
                         plot_ui.line(Line::new(grasses).name("Grasses"));
-                        plot_ui.line(Line::new(burning_grasses).name("Burning Grasses"));
-                        plot_ui.line(Line::new(grass_ashes).name("Grass ashes"));
+                        plot_ui.line(Line::new(burning).name("Burning Grasses"));
+                        plot_ui.line(Line::new(ashes).name("Grass Ashes"));
                     });
             });
     }
 }
 
+// ────────────────── Load simulation JSON ─────────────────────────────
+
 fn load_simulation_data() -> Option<GridData> {
     let file = File::open("assets/simulation.json").ok()?;
-    let reader = BufReader::new(file);
-    serde_json::from_reader(reader).ok()
+    serde_json::from_reader(BufReader::new(file)).ok()
 }
