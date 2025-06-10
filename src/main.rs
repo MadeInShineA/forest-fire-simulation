@@ -706,68 +706,111 @@ fn ui_system(
                     playback.jump_to_frame = Some(display_frame - 1);
                 }
                 ui.separator();
-                // ─────── Graphs ────────────────────────────────────────
+
+                let total_trees_over_time: Vec<f64> = (0..=sim.current)
+                    .map(|i| {
+                        (stats.trees_over_time[i]
+                            + stats.burning_trees_over_time[i]
+                            + stats.tree_ashes_over_time[i]) as f64
+                    })
+                    .collect();
+
+                let total_grass_over_time: Vec<f64> = (0..=sim.current)
+                    .map(|i| {
+                        (stats.grasses_over_time[i]
+                            + stats.burning_grasses_over_time[i]
+                            + stats.grass_ashes_over_time[i]) as f64
+                    })
+                    .collect();
+
                 ui.collapsing("Graphs", |ui| {
-                    ui.label("Tree Status");
-                    Plot::new("Trees")
+                    ui.label("Tree Status (%)");
+                    Plot::new("Trees Percentage")
                         .legend(Legend::default())
                         .height(120.0)
                         .show(ui, |plot_ui| {
-                            let trees: PlotPoints = stats
-                                .trees_over_time
-                                .iter()
-                                .take(sim.current + 1)
-                                .enumerate()
-                                .map(|(i, &v)| [i as f64, v as f64])
+                            let trees: PlotPoints = (0..=sim.current)
+                                .map(|i| {
+                                    let total = total_trees_over_time[i];
+                                    let value = if total > 0.0 {
+                                        (stats.trees_over_time[i] as f64 / total) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    [i as f64, value]
+                                })
                                 .collect();
-                            let burning: PlotPoints = stats
-                                .burning_trees_over_time
-                                .iter()
-                                .take(sim.current + 1)
-                                .enumerate()
-                                .map(|(i, &v)| [i as f64, v as f64])
+                            let burning: PlotPoints = (0..=sim.current)
+                                .map(|i| {
+                                    let total = total_trees_over_time[i];
+                                    let value = if total > 0.0 {
+                                        (stats.burning_trees_over_time[i] as f64 / total) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    [i as f64, value]
+                                })
                                 .collect();
-                            let ashes: PlotPoints = stats
-                                .tree_ashes_over_time
-                                .iter()
-                                .take(sim.current + 1)
-                                .enumerate()
-                                .map(|(i, &v)| [i as f64, v as f64])
+                            let ashes: PlotPoints = (0..=sim.current)
+                                .map(|i| {
+                                    let total = total_trees_over_time[i];
+                                    let value = if total > 0.0 {
+                                        (stats.tree_ashes_over_time[i] as f64 / total) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    [i as f64, value]
+                                })
                                 .collect();
-                            plot_ui.line(Line::new(trees).name("Trees"));
-                            plot_ui.line(Line::new(burning).name("Burning"));
-                            plot_ui.line(Line::new(ashes).name("Ashes"));
+
+                            plot_ui.line(Line::new(trees).name("Trees %"));
+                            plot_ui.line(Line::new(burning).name("Burning %"));
+                            plot_ui.line(Line::new(ashes).name("Ashes %"));
                         });
-                    ui.separator();
-                    ui.label("Grass Status");
-                    Plot::new("Grasses")
+
+                    // --- Grass Status as Percent ---
+                    ui.label("Grass Status (%)");
+                    Plot::new("Grass Percentage")
                         .legend(Legend::default())
                         .height(120.0)
                         .show(ui, |plot_ui| {
-                            let grasses: PlotPoints = stats
-                                .grasses_over_time
-                                .iter()
-                                .take(sim.current + 1)
-                                .enumerate()
-                                .map(|(i, &v)| [i as f64, v as f64])
+                            let grasses: PlotPoints = (0..=sim.current)
+                                .map(|i| {
+                                    let total = total_grass_over_time[i];
+                                    let value = if total > 0.0 {
+                                        (stats.grasses_over_time[i] as f64 / total) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    [i as f64, value]
+                                })
                                 .collect();
-                            let burning: PlotPoints = stats
-                                .burning_grasses_over_time
-                                .iter()
-                                .take(sim.current + 1)
-                                .enumerate()
-                                .map(|(i, &v)| [i as f64, v as f64])
+                            let burning: PlotPoints = (0..=sim.current)
+                                .map(|i| {
+                                    let total = total_grass_over_time[i];
+                                    let value = if total > 0.0 {
+                                        (stats.burning_grasses_over_time[i] as f64 / total) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    [i as f64, value]
+                                })
                                 .collect();
-                            let ashes: PlotPoints = stats
-                                .grass_ashes_over_time
-                                .iter()
-                                .take(sim.current + 1)
-                                .enumerate()
-                                .map(|(i, &v)| [i as f64, v as f64])
+                            let ashes: PlotPoints = (0..=sim.current)
+                                .map(|i| {
+                                    let total = total_grass_over_time[i];
+                                    let value = if total > 0.0 {
+                                        (stats.grass_ashes_over_time[i] as f64 / total) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    [i as f64, value]
+                                })
                                 .collect();
-                            plot_ui.line(Line::new(grasses).name("Grass"));
-                            plot_ui.line(Line::new(burning).name("Burning"));
-                            plot_ui.line(Line::new(ashes).name("Ashes"));
+
+                            plot_ui.line(Line::new(grasses).name("Grass %"));
+                            plot_ui.line(Line::new(burning).name("Burning %"));
+                            plot_ui.line(Line::new(ashes).name("Ashes %"));
                         });
                 });
             }

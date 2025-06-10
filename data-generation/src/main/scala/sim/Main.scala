@@ -50,15 +50,25 @@ object Main extends App {
   val grid = new Grid(width, height)
     .igniteRandomFires(onFireTreesPercent, onFireGrassPercent)
 
+  val isWindEnabled = if (enableWind == 1) true else false
   val steps = (1 until numberOfSteps).scanLeft(grid) { (g, _) =>
     g.nextStep(if (enableWind == 1) true else false, windAngle, windStrength)
   }
 
-  val json = Json.obj(
+  val json: JsObject = Json.obj(
     "width" -> grid.width,
     "height" -> grid.height,
     "steps" -> steps.map(_.encodeCells)
-  )
+  ) ++ {
+    if (isWindEnabled) {
+      Json.obj(
+        "windAngle" -> windAngle,
+        "windStrength" -> windStrength
+      )
+    } else {
+      Json.obj()
+    }
+  }
 
   Using.resource(new PrintWriter("assets/simulation.json")) { out =>
     out.write(Json.prettyPrint(json))
