@@ -444,8 +444,8 @@ fn check_simulation_ready_system(
             height: data.height,
         });
         spawn_camera(&mut commands);
-        playback.paused = true;
-        playback.jump_to_frame = Some(start_frame);
+        playback.paused = false;
+        playback.jump_to_frame = Some(0);
         loading.0 = false;
         *pending = PendingSimulation::default();
     }
