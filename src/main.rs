@@ -141,7 +141,7 @@ fn main() {
                 title: "🔥 Forest Fire Simulation 3D".into(),
                 resolution: (1280., 800.).into(),
                 resizable: false,
-                // mode: bevy::window::WindowMode::Fullscreen,
+                mode: bevy::window::WindowMode::Fullscreen,
                 ..default()
             }),
             ..default()
@@ -238,6 +238,10 @@ fn setup_assets(
         meshes.add(Mesh::from(Cylinder::new(5.0, 0.2))),
     );
     mesh_map.insert("burning_leaves", mesh_map["leaves"].clone());
+    mesh_map.insert("burning_leaves1", mesh_map["leaves"].clone());
+    mesh_map.insert("burning_leaves2", mesh_map["leaves"].clone());
+    mesh_map.insert("burning_leaves3", mesh_map["leaves"].clone());
+
     let mut mat_map = HashMap::new();
     mat_map.insert(
         "trunk",
@@ -254,10 +258,26 @@ fn setup_assets(
         }),
     );
     mat_map.insert(
-        "burning_leaves",
+        "burning_leaves1",
         materials.add(StandardMaterial {
-            base_color: Color::rgb(0.8, 0.1, 0.0),
-            emissive: Color::rgb(3.0, 0.6, 0.3),
+            base_color: Color::rgb(1.0, 0.4, 0.2),
+            emissive: Color::rgb(3.0, 1.0, 0.5),
+            ..default()
+        }),
+    );
+    mat_map.insert(
+        "burning_leaves2",
+        materials.add(StandardMaterial {
+            base_color: Color::rgb(0.6, 0.18, 0.08),
+            emissive: Color::rgb(1.5, 0.6, 0.3),
+            ..default()
+        }),
+    );
+    mat_map.insert(
+        "burning_leaves3",
+        materials.add(StandardMaterial {
+            base_color: Color::rgb(0.23, 0.07, 0.02),
+            emissive: Color::rgb(0.5, 0.12, 0.08),
             ..default()
         }),
     );
@@ -533,8 +553,8 @@ fn advance_frame_system(
                 offset_z + y as f32 * cell_size * spacing,
             );
             match cell.as_str() {
-                "T" | "*" => {
-                    if cell == "*" {
+                "T" | "*" | "**" | "***" => {
+                    if cell == "*" || cell == "**" || cell == "***" {
                         bt += 1
                     } else {
                         t += 1
@@ -543,10 +563,11 @@ fn advance_frame_system(
                     spawn_cell(
                         &mut commands,
                         &cache,
-                        if cell == "*" {
-                            "burning_leaves"
-                        } else {
-                            "leaves"
+                        match cell.as_str() {
+                            "*" => "burning_leaves1",
+                            "**" => "burning_leaves2",
+                            "***" => "burning_leaves3",
+                            _ => "leaves",
                         },
                         pos + Vec3::Y * 7.0,
                     );
@@ -602,7 +623,13 @@ fn kind_from_str(cell: &str) -> &'static str {
         "W" => "water",
         "+" => "burning_grass",
         "-" => "burnt_grass",
-        _ => "ash",
+        "*" => "burning_leaves1",
+        "**" => "burning_leaves2",
+        "***" => "burning_leaves3",
+        other => panic!(
+            "Unknown cell type encountered in kind_from_str: '{}'",
+            other
+        ),
     }
 }
 fn spawn_cell(commands: &mut Commands, cache: &CachedAssets, kind: &str, pos: Vec3) {
