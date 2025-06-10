@@ -141,7 +141,7 @@ fn main() {
                 title: "🔥 Forest Fire Simulation 3D".into(),
                 resolution: (1280., 800.).into(),
                 resizable: false,
-                mode: bevy::window::WindowMode::Fullscreen,
+                // mode: bevy::window::WindowMode::Fullscreen,
                 ..default()
             }),
             ..default()
@@ -789,7 +789,8 @@ fn ui_system(
                                 .map(|i| {
                                     let total = total_grass_over_time[i];
                                     let value = if total > 0.0 {
-                                        (stats.burning_grasses_over_time[i] as f64 / total) * 100.0
+                                        (stats.burning_grasses_over_time[i] as f64 / total)
+                                            * 100.0
                                     } else {
                                         0.0
                                     };
@@ -815,6 +816,87 @@ fn ui_system(
                 });
             }
         });
+
+    // ───────────────── Wind Indicator (NEW) ──────────────────
+    if params.is_wind_toggled {
+        egui::Area::new("wind_indicator")
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 20.0))
+            .show(ctx, |ui| {
+                let desired_size = egui::vec2(120.0, 140.0);
+                let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+                let painter = ui.painter();
+                let center = rect.center() - egui::vec2(0.0, 10.0);
+
+                // Draw compass background
+                let compass_radius = 50.0;
+                painter.circle_stroke(center, compass_radius, egui::Stroke::new(1.0, egui::Color32::GRAY));
+                painter.text(center + egui::vec2(0.0, -(compass_radius + 5.0)), egui::Align2::CENTER_CENTER, "N", egui::FontId::proportional(12.0), egui::Color32::LIGHT_GRAY);
+                painter.text(center + egui::vec2(0.0, compass_radius + 5.0), egui::Align2::CENTER_CENTER, "S", egui::FontId::proportional(12.0), egui::Color32::LIGHT_GRAY);
+                painter.text(center + egui::vec2(compass_radius + 5.0, 0.0), egui::Align2::CENTER_CENTER, "E", egui::FontId::proportional(12.0), egui::Color32::LIGHT_GRAY);
+                painter.text(center + egui::vec2(-(compass_radius + 5.0), 0.0), egui::Align2::CENTER_CENTER, "W", egui::FontId::proportional(12.0), egui::Color32::LIGHT_GRAY);
+
+                // Calculate arrow properties
+                // The angle from the slider indicates where the wind is COMING FROM.
+                // The arrow should point in the direction the wind is GOING TO.
+                // For 0 degrees to be North, and rotate clockwise for increasing angles:
+                // Egui's +Y is down, +X is right.
+                // North (0 deg) should be straight up (-Y).
+                // East (90 deg) should be straight right (+X).
+                // South (180 deg) should be straight down (+Y).
+                // West (270 deg) should be straight left (-X).
+
+                // Convert angle from degrees to radians, adjust for coordinate system.
+                // 0 degrees North (up) in Egui is -PI/2 or 270 degrees in standard math unit circle.
+                // Clockwise rotation means increasing angle reduces Y and increases X for first quadrant.
+                let wind_goes_to_angle_rad = (params.wind_angle as f32).to_radians();
+
+                // To make 0 degrees point North and rotate clockwise:
+                // Egui's coordinate system: +X right, +Y down.
+                // North: (0, -1)
+                // East:  (1, 0)
+                // South: (0, 1)
+                // West:  (-1, 0)
+                // We want:
+                // Angle 0 (N) -> (0, -1)
+                // Angle 90 (E) -> (1, 0)
+                // Angle 180 (S) -> (0, 1)
+                // Angle 270 (W) -> (-1, 0)
+
+                // This mapping is achieved by `(sin(angle), cos(angle))` if 0 degrees is positive X
+                // and positive angle is counter-clockwise.
+                // Since our angle is already clockwise from North, we can directly use:
+                let dir_x = wind_goes_to_angle_rad.sin();
+                let dir_y = -wind_goes_to_angle_rad.cos(); // Negate cos to make North point up (-Y)
+
+                let dir = egui::vec2(dir_x, dir_y);
+
+                // Strength affects length (slider range 1-100)
+                let max_len = compass_radius - 5.0;
+                let min_len = 10.0;
+                let strength_ratio = (params.wind_strength.saturating_sub(1)) as f32 / 99.0;
+                let length = min_len + strength_ratio * (max_len - min_len);
+
+                // Center the arrow within the compass
+                let arrow_base = center - dir * length / 2.0;
+                let arrow_vec = dir * length;
+
+                painter.arrow(
+                    arrow_base,
+                    arrow_vec,
+                    egui::Stroke::new(3.0, egui::Color32::from_rgb(255, 100, 100)),
+                );
+
+                // Draw strength text below the compass
+                let strength_text = format!("{} km/h", params.wind_strength);
+                painter.text(
+                    rect.center() + egui::vec2(0.0, compass_radius + 5.0),
+                    egui::Align2::CENTER_CENTER,
+                    strength_text,
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+            });
+    }
 }
 fn load_simulation_data() -> Option<GridData> {
     let file = File::open("assets/simulation.json").ok()?;
