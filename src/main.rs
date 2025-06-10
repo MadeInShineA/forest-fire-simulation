@@ -38,6 +38,9 @@ struct SimulationParams {
     height: u32,
     burning_trees: u32,
     burning_grasses: u32,
+    is_wind_toggled: bool,
+    wind_angle: u32,
+    wind_strength: u32,
     number_of_steps: u32,
     trigger_simulation: bool,
 }
@@ -55,7 +58,6 @@ struct CachedAssets {
 struct PendingSimulation {
     handle: Option<thread::JoinHandle<()>>,
     result: Arc<Mutex<Option<GridData>>>,
-    progress: Arc<Mutex<f32>>,
 }
 
 #[derive(Resource, Default)]
@@ -118,6 +120,9 @@ fn main() {
             height: 20,
             burning_trees: 15,
             burning_grasses: 20,
+            is_wind_toggled: false,
+            wind_angle: 0,
+            wind_strength: 1,
             number_of_steps: 20,
             trigger_simulation: false,
         })
@@ -335,17 +340,18 @@ fn start_simulation_button_system(
     loading.0 = true;
 
     let result = Arc::new(Mutex::new(None));
-    let progress = Arc::new(Mutex::new(0.0));
     let cmd = format!(
-        "sh run-sim.sh {} {} {} {} {}",
+        "sh run-sim.sh {} {} {} {} {} {} {} {}",
         params.width,
         params.height,
         params.burning_trees,
         params.burning_grasses,
+        params.is_wind_toggled as i32,
+        params.wind_angle,
+        params.wind_strength,
         params.number_of_steps
     );
     let result_clone = Arc::clone(&result);
-    let progress_clone = Arc::clone(&progress);
 
     let handle = thread::spawn(move || {
         let mut child = Command::new("sh")
@@ -357,11 +363,7 @@ fn start_simulation_button_system(
 
         if let Some(stdout) = child.stdout.take() {
             for line in BufReader::new(stdout).lines().flatten() {
-                if let Some(p) = line.strip_prefix("PROGRESS:") {
-                    if let Ok(val) = p.trim().parse::<f32>() {
-                        *progress_clone.lock().unwrap() = val.min(100.0);
-                    }
-                }
+                println!("[Scala]: {}", line);
             }
         }
 
@@ -373,7 +375,6 @@ fn start_simulation_button_system(
 
     pending.handle = Some(handle);
     pending.result = result;
-    pending.progress = progress;
     params.trigger_simulation = false;
 }
 
@@ -688,7 +689,20 @@ fn ui_system(
             ui.add(
                 egui::Slider::new(&mut params.burning_grasses, 0..=100).text("Burning grasses %"),
             );
+
             ui.add(egui::Slider::new(&mut params.number_of_steps, 1..=100).text("Number of steps"));
+            ui.add(egui::Checkbox::new(
+                &mut params.is_wind_toggled,
+                "Enable wind",
+            ));
+            if params.is_wind_toggled {
+                ui.add(egui::Slider::new(&mut params.wind_angle, 0..=359).text("Wind angle °"));
+                ui.add(
+                    egui::Slider::new(&mut params.wind_strength, 1..=100)
+                        .text("Wind strength km/h"),
+                );
+            }
+
             if ui.button("Start Simulation").clicked() {
                 params.trigger_simulation = true;
             }

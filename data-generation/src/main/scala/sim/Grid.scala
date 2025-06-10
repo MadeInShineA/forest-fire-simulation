@@ -1,7 +1,6 @@
 package sim
 
 import scala.util.{Random, Using}
-import java.io.PrintWriter
 import play.api.libs.json._
 
 // === Cell Types ===
@@ -97,7 +96,10 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
     }
   }
 
-  def nextStep(): Grid = {
+  def nextStep(enableWind: Boolean, windAngle: Int, windStrength: Int): Grid = {
+    println(s"Enable wind: $enableWind")
+    println(s"Wind angle: $windAngle")
+    println(s"Wind strength: $windStrength")
     val rand = new Random()
     val newCells = Vector.tabulate(height, width) { (y, x) =>
       val current = cells(y)(x).cellType
