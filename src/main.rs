@@ -139,6 +139,7 @@ fn main() {
                 title: "🔥 Forest Fire Simulation 3D".into(),
                 resolution: (1280., 800.).into(),
                 resizable: false,
+                mode: bevy::window::WindowMode::Fullscreen,
                 ..default()
             }),
             ..default()
