@@ -97,23 +97,119 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
   }
 
   def nextStep(enableWind: Boolean, windAngle: Int, windStrength: Int): Grid = {
-    println(s"Enable wind: $enableWind")
-    println(s"Wind angle: $windAngle")
-    println(s"Wind strength: $windStrength")
     val rand = new Random()
+
+    // Wind vector (unit)
+    val windRad = math.toRadians(windAngle)
+    val windVec = (math.sin(windRad), -math.cos(windRad))
+
+    // All 8 neighbor directions
+    val neighborDirs = List(
+      (-1, -1),
+      (0, -1),
+      (1, -1),
+      (-1, 0),
+      (1, 0),
+      (-1, 1),
+      (0, 1),
+      (1, 1)
+    )
+
+    // Wind boost for each neighbor
+    def windBoost(dx: Int, dy: Int): Double = {
+      if (!enableWind) 1.0
+      else {
+        val nrm = math.sqrt(dx * dx + dy * dy)
+        if (nrm == 0) 1.0
+        else {
+          val dir = (dx / nrm, dy / nrm)
+          val alignment = windVec._1 * dir._1 + windVec._2 * dir._2 // -1 to 1
+
+          // If wind is strong (e.g., > 25 km/h), upwind is impossible
+          val minBoost =
+            if (windStrength >= 25) 0.0
+            else 0.2 // Very low but not zero for less strong winds
+
+          val boost = 1.0 + alignment * (windStrength / 20.0)
+          if (alignment < -0.7 && windStrength >= 20)
+            0.0 // almost upwind, strong wind
+          else boost.max(minBoost).min(2.0)
+        }
+      }
+    }
+
+    // Compute new cells (normal fire spread)
     val newCells = Vector.tabulate(height, width) { (y, x) =>
-      val current = cells(y)(x).cellType
-      current match {
-        case Tree if isBurningNeighbor(x, y) && rand.nextDouble() < 0.5 =>
-          Cell(BurningTree)
-        case Grass if isBurningNeighbor(x, y) && rand.nextDouble() < 0.8 =>
-          Cell(BurningGrass)
+      cells(y)(x).cellType match {
+        case Tree =>
+          val baseProb = 0.2
+          val ignites = neighborDirs.exists { case (dx, dy) =>
+            getCell(x + dx, y + dy) match {
+              case Some(Cell(BurningTree | BurningGrass)) =>
+                val boost = windBoost(dx, dy)
+                rand.nextDouble() < baseProb * boost
+              case _ => false
+            }
+          }
+          if (ignites) Cell(BurningTree) else Cell(Tree)
+
+        case Grass =>
+          val baseProb = 0.4
+          val ignites = neighborDirs.exists { case (dx, dy) =>
+            getCell(x + dx, y + dy) match {
+              case Some(Cell(BurningTree | BurningGrass)) =>
+                val boost = windBoost(dx, dy)
+                rand.nextDouble() < baseProb * boost
+              case _ => false
+            }
+          }
+          if (ignites) Cell(BurningGrass) else Cell(Grass)
+
         case BurningTree  => Cell(Ash)
         case BurningGrass => Cell(BurnedGrass)
         case other        => Cell(other)
       }
     }
-    copy(cells = newCells)
+
+    // Fire jump (spotting)
+    val baseJumpChance = 0.01
+    val jumpChance = baseJumpChance * (1 + windStrength / 20.0)
+    val maxJumpDist = math.ceil(windStrength / 10.0).toInt max 1
+
+    // Compute fire jump targets
+    val jumpCells = (for {
+      y <- 0 until height
+      x <- 0 until width
+      cell = cells(y)(x)
+      if cell.cellType == BurningTree || cell.cellType == BurningGrass
+      if rand.nextDouble() < jumpChance
+    } yield {
+      // Fire can "jump" to a random distance up to maxJumpDist
+      val dist = rand.nextInt(maxJumpDist) + 1 // [1, maxJumpDist]
+      val dx = math.round(windVec._1 * dist).toInt
+      val dy = math.round(windVec._2 * dist).toInt
+      val tx = x + dx
+      val ty = y + dy
+      (tx, ty)
+    }).filter { case (tx, ty) =>
+      tx >= 0 && tx < width && ty >= 0 && ty < height &&
+      (cells(ty)(tx).cellType == Tree || cells(ty)(tx).cellType == Grass)
+    }.toSet
+
+    // Apply fire jumps
+    val finalCells = newCells.zipWithIndex.map { case (row, y) =>
+      row.zipWithIndex.map { case (cell, x) =>
+        if (jumpCells.contains((x, y))) {
+          cell.cellType match {
+            case Tree  => Cell(BurningTree)
+            case Grass => Cell(BurningGrass)
+            case _     => cell
+          }
+        } else cell
+      }
+    }
+
+    copy(cells = finalCells)
   }
 
   def printGrid(): Unit = {

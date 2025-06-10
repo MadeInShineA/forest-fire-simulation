@@ -520,9 +520,13 @@ fn advance_frame_system(
     let spacing = 1.5;
     let offset_x = -(sim.width as f32 * cell_size * spacing) / 2.0;
     let offset_z = -(sim.height as f32 * cell_size * spacing) / 2.0;
+    let height = grid.len();
+    let width = grid[0].len();
     let (mut t, mut bt, mut ta, mut g, mut bg, mut ga) = (0, 0, 0, 0, 0, 0);
-    for (y, row) in grid.iter().enumerate() {
-        for (x, cell) in row.iter().enumerate() {
+    for (iy, row) in grid.iter().enumerate() {
+        let y = height - 1 - iy;
+        for (ix, cell) in row.iter().enumerate() {
+            let x = width - 1 - ix; // Flip horizontally
             let pos = Vec3::new(
                 offset_x + x as f32 * cell_size * spacing,
                 0.0,
@@ -789,8 +793,7 @@ fn ui_system(
                                 .map(|i| {
                                     let total = total_grass_over_time[i];
                                     let value = if total > 0.0 {
-                                        (stats.burning_grasses_over_time[i] as f64 / total)
-                                            * 100.0
+                                        (stats.burning_grasses_over_time[i] as f64 / total) * 100.0
                                     } else {
                                         0.0
                                     };
@@ -829,11 +832,39 @@ fn ui_system(
 
                 // Draw compass background
                 let compass_radius = 50.0;
-                painter.circle_stroke(center, compass_radius, egui::Stroke::new(1.0, egui::Color32::GRAY));
-                painter.text(center + egui::vec2(0.0, -(compass_radius + 5.0)), egui::Align2::CENTER_CENTER, "N", egui::FontId::proportional(12.0), egui::Color32::LIGHT_GRAY);
-                painter.text(center + egui::vec2(0.0, compass_radius + 5.0), egui::Align2::CENTER_CENTER, "S", egui::FontId::proportional(12.0), egui::Color32::LIGHT_GRAY);
-                painter.text(center + egui::vec2(compass_radius + 5.0, 0.0), egui::Align2::CENTER_CENTER, "E", egui::FontId::proportional(12.0), egui::Color32::LIGHT_GRAY);
-                painter.text(center + egui::vec2(-(compass_radius + 5.0), 0.0), egui::Align2::CENTER_CENTER, "W", egui::FontId::proportional(12.0), egui::Color32::LIGHT_GRAY);
+                painter.circle_stroke(
+                    center,
+                    compass_radius,
+                    egui::Stroke::new(1.0, egui::Color32::GRAY),
+                );
+                painter.text(
+                    center + egui::vec2(0.0, -(compass_radius + 5.0)),
+                    egui::Align2::CENTER_CENTER,
+                    "N",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+                painter.text(
+                    center + egui::vec2(0.0, compass_radius + 5.0),
+                    egui::Align2::CENTER_CENTER,
+                    "S",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+                painter.text(
+                    center + egui::vec2(compass_radius + 5.0, 0.0),
+                    egui::Align2::CENTER_CENTER,
+                    "E",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+                painter.text(
+                    center + egui::vec2(-(compass_radius + 5.0), 0.0),
+                    egui::Align2::CENTER_CENTER,
+                    "W",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
 
                 // Calculate arrow properties
                 // The angle from the slider indicates where the wind is COMING FROM.
