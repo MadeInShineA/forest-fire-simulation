@@ -12,28 +12,48 @@ case object BurningTree1 extends CellType
 case object BurningTree2 extends CellType
 case object BurningTree3 extends CellType
 case object BurningGrass extends CellType
-case object Ash extends CellType
-case object BurnedGrass extends CellType
+case class Ash(deadSteps: Int) extends CellType
+case class BurnedGrass(deadSteps: Int) extends CellType
 
 case class Cell(cellType: CellType)
 
 // === JSON Serialization for Compact Export ===
 object JsonFormats {
   implicit val cellTypeWrites: Writes[CellType] = Writes {
-    case Water        => JsString("W")
-    case Grass        => JsString("G")
-    case Tree         => JsString("T")
-    case BurningTree1 => JsString("*")
-    case BurningTree2 => JsString("**")
-    case BurningTree3 => JsString("***")
-    case BurningGrass => JsString("+")
-    case Ash          => JsString("A")
-    case BurnedGrass  => JsString("-")
+    case Water          => JsString("W")
+    case Grass          => JsString("G")
+    case Tree           => JsString("T")
+    case BurningTree1   => JsString("*")
+    case BurningTree2   => JsString("**")
+    case BurningTree3   => JsString("***")
+    case BurningGrass   => JsString("+")
+    case Ash(_)         => JsString("A")
+    case BurnedGrass(_) => JsString("-")
   }
 }
 
 // === Grid ===
-case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
+case class Grid(
+    width: Int,
+    height: Int,
+    cells: Vector[Vector[Cell]],
+    ashRegrowSteps: Int = 7, // Steps for tree (ash) regrowth
+    burnedGrassRegrowSteps: Int = 4, // Steps for grass regrowth
+
+    treeIgniteProb: Double = 0.2, // Probability tree ignites from neighbor
+    grassIgniteProb: Double = 0.4, // Probability grass ignites from neighbor
+
+    windStrengthFactor: Double = 20.0, // Wind impact factor (spread/jump boost)
+    windMinBoost: Double = 0.2, // Minimum wind boost for spread
+    windStrongMin: Int = 25, // Wind strength threshold for zero boost
+
+    fireJumpBaseChance: Double = 0.01, // Base chance for fire jump
+    fireJumpDistFactor: Double =
+      10.0, // How far fire can jump (windStrength / this)
+    ashToTreeProb: Double = 0.5, // probability Ash -> Tree; (1-p) -> Grass
+    burnedGrassToGrassProb: Double =
+      0.85 // probability BurnedGrass -> Grass; (1-p) -> Tree
+) {
 
   def this(width: Int, height: Int) = {
     this(
@@ -83,7 +103,20 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
       }
     }
 
-    copy(cells = newCells)
+    copy(
+      cells = newCells,
+      ashRegrowSteps = ashRegrowSteps,
+      burnedGrassRegrowSteps = burnedGrassRegrowSteps,
+      treeIgniteProb = treeIgniteProb,
+      grassIgniteProb = grassIgniteProb,
+      fireJumpBaseChance = fireJumpBaseChance,
+      windStrengthFactor = windStrengthFactor,
+      windMinBoost = windMinBoost,
+      windStrongMin = windStrongMin,
+      fireJumpDistFactor = fireJumpDistFactor,
+      ashToTreeProb = ashToTreeProb,
+      burnedGrassToGrassProb = burnedGrassToGrassProb
+    )
   }
 
   def getCell(x: Int, y: Int): Option[Cell] =
@@ -99,6 +132,28 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
             if burningTrees.contains(cellType) || cellType == BurningGrass =>
           true
         case _ => false
+      }
+    }
+  }
+
+  /** Helper: is there any water, grass, or tree adjacent to (x, y)? */
+  def hasLivingOrWaterNeighbor(x: Int, y: Int): Boolean = {
+    val neighborDirs = List(
+      (-1, -1),
+      (0, -1),
+      (1, -1),
+      (-1, 0),
+      (1, 0),
+      (-1, 1),
+      (0, 1),
+      (1, 1)
+    )
+    neighborDirs.exists { case (dx, dy) =>
+      getCell(x + dx, y + dy) match {
+        case Some(Cell(Water)) => true
+        case Some(Cell(Grass)) => true
+        case Some(Cell(Tree))  => true
+        case _                 => false
       }
     }
   }
@@ -136,22 +191,21 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
           val alignment = windVec._1 * dir._1 + windVec._2 * dir._2 // -1 to 1
 
           val minBoost =
-            if (windStrength >= 25) 0.0
-            else 0.2 // Very low but not zero for less strong winds
+            if (windStrength >= windStrongMin) 0.0
+            else windMinBoost
 
-          val boost = 1.0 + alignment * (windStrength / 20.0)
-          if (alignment < -0.7 && windStrength >= 20)
+          val boost = 1.0 + alignment * (windStrength / windStrengthFactor)
+          if (alignment < -0.7 && windStrength >= windStrongMin)
             0.0 // almost upwind, strong wind
           else boost.max(minBoost).min(2.0)
         }
       }
     }
 
-    // Compute new cells (normal fire spread)
+    // Compute new cells (fire spread and regrowth)
     val newCells = Vector.tabulate(height, width) { (y, x) =>
       cells(y)(x).cellType match {
         case Tree =>
-          val baseProb = 0.2
           val ignites = neighborDirs.exists { case (dx, dy) =>
             getCell(x + dx, y + dy) match {
               case Some(Cell(cellType))
@@ -159,14 +213,13 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
                     cellType
                   ) || cellType == BurningGrass =>
                 val boost = windBoost(dx, dy)
-                rand.nextDouble() < baseProb * boost
+                rand.nextDouble() < treeIgniteProb * boost
               case _ => false
             }
           }
           if (ignites) Cell(BurningTree1) else Cell(Tree)
 
         case Grass =>
-          val baseProb = 0.4
           val ignites = neighborDirs.exists { case (dx, dy) =>
             getCell(x + dx, y + dy) match {
               case Some(Cell(cellType))
@@ -174,7 +227,7 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
                     cellType
                   ) || cellType == BurningGrass =>
                 val boost = windBoost(dx, dy)
-                rand.nextDouble() < baseProb * boost
+                rand.nextDouble() < grassIgniteProb * boost
               case _ => false
             }
           }
@@ -182,16 +235,37 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
 
         case BurningTree1 => Cell(BurningTree2)
         case BurningTree2 => Cell(BurningTree3)
-        case BurningTree3 => Cell(Ash)
-        case BurningGrass => Cell(BurnedGrass)
-        case other        => Cell(other)
+        case BurningTree3 => Cell(Ash(0))
+        case BurningGrass => Cell(BurnedGrass(0))
+
+        case Ash(deadSteps) =>
+          if (
+            deadSteps >= ashRegrowSteps - 1 && hasLivingOrWaterNeighbor(x, y)
+          ) {
+            if (rand.nextDouble() < ashToTreeProb) Cell(Tree) else Cell(Grass)
+          } else {
+            Cell(Ash(deadSteps + 1))
+          }
+        case BurnedGrass(deadSteps) =>
+          if (
+            deadSteps >= burnedGrassRegrowSteps - 1 && hasLivingOrWaterNeighbor(
+              x,
+              y
+            )
+          ) {
+            if (rand.nextDouble() < burnedGrassToGrassProb) Cell(Grass)
+            else Cell(Tree)
+          } else {
+            Cell(BurnedGrass(deadSteps + 1))
+          }
+        case other => Cell(other)
       }
     }
 
     // Fire jump (spotting)
-    val baseJumpChance = 0.01
-    val jumpChance = baseJumpChance * (1 + windStrength / 20.0)
-    val maxJumpDist = math.ceil(windStrength / 10.0).toInt max 1
+    val jumpChance =
+      fireJumpBaseChance * (1 + windStrength / windStrengthFactor)
+    val maxJumpDist = math.ceil(windStrength / fireJumpDistFactor).toInt max 1
 
     // Compute fire jump targets
     val jumpCells = (for {
@@ -225,7 +299,20 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
       }
     }
 
-    copy(cells = finalCells)
+    copy(
+      cells = finalCells,
+      ashRegrowSteps = ashRegrowSteps,
+      burnedGrassRegrowSteps = burnedGrassRegrowSteps,
+      treeIgniteProb = treeIgniteProb,
+      grassIgniteProb = grassIgniteProb,
+      fireJumpBaseChance = fireJumpBaseChance,
+      windStrengthFactor = windStrengthFactor,
+      windMinBoost = windMinBoost,
+      windStrongMin = windStrongMin,
+      fireJumpDistFactor = fireJumpDistFactor,
+      ashToTreeProb = ashToTreeProb,
+      burnedGrassToGrassProb = burnedGrassToGrassProb
+    )
   }
 
   def printGrid(): Unit = {
@@ -233,30 +320,30 @@ case class Grid(width: Int, height: Int, cells: Vector[Vector[Cell]]) {
   }
 
   private def cellSymbol(cell: Cell): String = cell.cellType match {
-    case Water        => "~"
-    case Grass        => "."
-    case Tree         => "T"
-    case BurningTree1 => "*"
-    case BurningTree2 => "2"
-    case BurningTree3 => "3"
-    case BurningGrass => "+"
-    case Ash          => "x"
-    case BurnedGrass  => "-"
+    case Water          => "~"
+    case Grass          => "."
+    case Tree           => "T"
+    case BurningTree1   => "*"
+    case BurningTree2   => "2"
+    case BurningTree3   => "3"
+    case BurningGrass   => "+"
+    case Ash(_)         => "x"
+    case BurnedGrass(_) => "-"
   }
 
   def encodeCells: Vector[Vector[String]] = {
     cells.map(
       _.map(cell =>
         cell.cellType match {
-          case Water        => "W"
-          case Grass        => "G"
-          case Tree         => "T"
-          case BurningTree1 => "*"
-          case BurningTree2 => "**"
-          case BurningTree3 => "***"
-          case BurningGrass => "+"
-          case Ash          => "A"
-          case BurnedGrass  => "-"
+          case Water          => "W"
+          case Grass          => "G"
+          case Tree           => "T"
+          case BurningTree1   => "*"
+          case BurningTree2   => "**"
+          case BurningTree3   => "***"
+          case BurningGrass   => "+"
+          case Ash(_)         => "A"
+          case BurnedGrass(_) => "-"
         }
       )
     )

@@ -108,6 +108,9 @@ struct LoadingTextTimer {
 }
 #[derive(Component)]
 struct FlyCamera;
+
+#[derive(Resource, Default)]
+struct ShowGraphs(pub bool);
 // ───────────────────────────── App entry ────────────────────────────────
 fn main() {
     App::new()
@@ -136,6 +139,7 @@ fn main() {
         })
         // placeholder stats so systems can run before first sim loads
         .insert_resource(SimulationStats::new(1, None))
+        .insert_resource(ShowGraphs(false))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "🔥 Forest Fire Simulation 3D".into(),
@@ -158,6 +162,7 @@ fn main() {
             ),
         )
         .add_systems(Update, camera_movement_system)
+        .add_systems(Update, space_pause_resume_system)
         .run();
 }
 fn camera_movement_system(
@@ -654,6 +659,7 @@ fn ui_system(
     time: Res<Time>,
     mut playback: ResMut<PlaybackControl>,
     stats: Res<SimulationStats>,
+    mut show_graphs_resource: ResMut<ShowGraphs>,
 ) {
     let sim_ref = sim.as_ref().map(|r| &**r);
     let ctx = contexts.ctx_mut();
@@ -705,7 +711,6 @@ fn ui_system(
                 ui.separator();
                 ui.label("Playback Controls");
                 ui.horizontal(|ui| {
-                    // go-to-start (reset)
                     if ui.small_button("|⏮").clicked() {
                         playback.jump_to_frame = Some(0);
                         playback.paused = true;
@@ -727,7 +732,6 @@ fn ui_system(
                     }
                 });
                 ui.add(egui::Slider::new(&mut playback.speed, 0.05..=2.0).text("Speed s/frame"));
-                // Frame slider
                 ui.label(format!("Frame: {}/{}", sim.current + 1, sim.frames.len()));
                 let mut display_frame = sim.current + 1;
                 if ui
@@ -738,23 +742,54 @@ fn ui_system(
                 }
                 ui.separator();
 
-                let total_trees_over_time: Vec<f64> = (0..=sim.current)
-                    .map(|i| {
-                        (stats.trees_over_time[i]
-                            + stats.burning_trees_over_time[i]
-                            + stats.tree_ashes_over_time[i]) as f64
+                // --- NEW: Toggle for Graphs Floating Window ---
+                let show_graphs = &mut show_graphs_resource.0;
+                if ui
+                    .button(if *show_graphs {
+                        "Hide Graphs"
+                    } else {
+                        "Show Graphs"
                     })
-                    .collect();
+                    .clicked()
+                {
+                    *show_graphs = !*show_graphs;
+                }
+            }
+        });
 
-                let total_grass_over_time: Vec<f64> = (0..=sim.current)
-                    .map(|i| {
-                        (stats.grasses_over_time[i]
-                            + stats.burning_grasses_over_time[i]
-                            + stats.grass_ashes_over_time[i]) as f64
-                    })
-                    .collect();
+    // ─────── Floating Graphs Window ─────────────────────────────
+    if let Some(sim) = sim_ref {
+        let initial_total = stats.trees_over_time[0]
+            + stats.burning_trees_over_time[0]
+            + stats.tree_ashes_over_time[0]
+            + stats.grasses_over_time[0]
+            + stats.burning_grasses_over_time[0]
+            + stats.grass_ashes_over_time[0];
 
-                ui.collapsing("Graphs", |ui| {
+        let total_trees_over_time: Vec<f64> = (0..=sim.current)
+            .map(|i| {
+                (stats.trees_over_time[i]
+                    + stats.burning_trees_over_time[i]
+                    + stats.tree_ashes_over_time[i]) as f64
+            })
+            .collect();
+
+        let total_grass_over_time: Vec<f64> = (0..=sim.current)
+            .map(|i| {
+                (stats.grasses_over_time[i]
+                    + stats.burning_grasses_over_time[i]
+                    + stats.grass_ashes_over_time[i]) as f64
+            })
+            .collect();
+
+        // Show floating window if toggled
+        if show_graphs_resource.0 {
+            egui::Window::new("Simulation Graphs")
+                .open(&mut show_graphs_resource.0)
+                .default_width(550.0)
+                .default_height(700.0)
+                .show(ctx, |ui| {
+                    // --- Trees as Percent ---
                     ui.label("Tree Status (%)");
                     Plot::new("Trees Percentage")
                         .legend(Legend::default())
@@ -799,7 +834,7 @@ fn ui_system(
                             plot_ui.line(Line::new(ashes).name("Ashes %"));
                         });
 
-                    // --- Grass Status as Percent ---
+                    // --- Grass as Percent ---
                     ui.label("Grass Status (%)");
                     Plot::new("Grass Percentage")
                         .legend(Legend::default())
@@ -843,11 +878,74 @@ fn ui_system(
                             plot_ui.line(Line::new(burning).name("Burning %"));
                             plot_ui.line(Line::new(ashes).name("Ashes %"));
                         });
-                });
-            }
-        });
 
-    // ───────────────── Wind Indicator (NEW) ──────────────────
+                    // --- Burning Cells (%) ---
+                    ui.label("Burning Cells (%)");
+                    Plot::new("BurningCellsPercent")
+                        .legend(Legend::default())
+                        .height(120.0)
+                        .show(ui, |plot_ui| {
+                            let burning_percent: PlotPoints = (0..=sim.current)
+                                .map(|i| {
+                                    let burning = stats.burning_trees_over_time[i]
+                                        + stats.burning_grasses_over_time[i];
+                                    let pct = if initial_total > 0 {
+                                        (burning as f64 / initial_total as f64) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    [i as f64, pct]
+                                })
+                                .collect();
+                            plot_ui.line(Line::new(burning_percent).name("Burning %"));
+                        });
+
+                    ui.label("New Burning Cells Per Step");
+                    Plot::new("NewBurnings")
+                        .legend(Legend::default())
+                        .height(120.0)
+                        .show(ui, |plot_ui| {
+                            let mut prev = 0;
+                            let new_burning: PlotPoints = (0..=sim.current)
+                                .map(|i| {
+                                    let curr = stats.burning_trees_over_time[i]
+                                        + stats.burning_grasses_over_time[i];
+                                    let nb = if i == 0 {
+                                        curr
+                                    } else {
+                                        curr.saturating_sub(prev)
+                                    };
+                                    prev = curr;
+                                    [i as f64, nb as f64]
+                                })
+                                .collect();
+                            plot_ui.line(Line::new(new_burning).name("New Burning"));
+                        });
+
+                    ui.label("Percentage of Area Burned");
+                    Plot::new("PercentBurned")
+                        .legend(Legend::default())
+                        .height(120.0)
+                        .show(ui, |plot_ui| {
+                            let percent_burned: PlotPoints = (0..=sim.current)
+                                .map(|i| {
+                                    let burned = stats.tree_ashes_over_time[i]
+                                        + stats.grass_ashes_over_time[i];
+                                    let pct = if initial_total > 0 {
+                                        (burned as f64 / initial_total as f64) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    [i as f64, pct]
+                                })
+                                .collect();
+                            plot_ui.line(Line::new(percent_burned).name("% Burned"));
+                        });
+                });
+        }
+    }
+
+    // ───────────────── Wind Indicator (unchanged) ──────────────────
     if params.is_wind_toggled {
         egui::Area::new("wind_indicator")
             .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 20.0))
@@ -857,7 +955,6 @@ fn ui_system(
                 let painter = ui.painter();
                 let center = rect.center() - egui::vec2(0.0, 10.0);
 
-                // Draw compass background
                 let compass_radius = 50.0;
                 painter.circle_stroke(
                     center,
@@ -893,48 +990,17 @@ fn ui_system(
                     egui::Color32::LIGHT_GRAY,
                 );
 
-                // Calculate arrow properties
-                // The angle from the slider indicates where the wind is COMING FROM.
-                // The arrow should point in the direction the wind is GOING TO.
-                // For 0 degrees to be North, and rotate clockwise for increasing angles:
-                // Egui's +Y is down, +X is right.
-                // North (0 deg) should be straight up (-Y).
-                // East (90 deg) should be straight right (+X).
-                // South (180 deg) should be straight down (+Y).
-                // West (270 deg) should be straight left (-X).
-
-                // Convert angle from degrees to radians, adjust for coordinate system.
-                // 0 degrees North (up) in Egui is -PI/2 or 270 degrees in standard math unit circle.
-                // Clockwise rotation means increasing angle reduces Y and increases X for first quadrant.
                 let wind_goes_to_angle_rad = (params.wind_angle as f32).to_radians();
-
-                // To make 0 degrees point North and rotate clockwise:
-                // Egui's coordinate system: +X right, +Y down.
-                // North: (0, -1)
-                // East:  (1, 0)
-                // South: (0, 1)
-                // West:  (-1, 0)
-                // We want:
-                // Angle 0 (N) -> (0, -1)
-                // Angle 90 (E) -> (1, 0)
-                // Angle 180 (S) -> (0, 1)
-                // Angle 270 (W) -> (-1, 0)
-
-                // This mapping is achieved by `(sin(angle), cos(angle))` if 0 degrees is positive X
-                // and positive angle is counter-clockwise.
-                // Since our angle is already clockwise from North, we can directly use:
                 let dir_x = wind_goes_to_angle_rad.sin();
-                let dir_y = -wind_goes_to_angle_rad.cos(); // Negate cos to make North point up (-Y)
+                let dir_y = -wind_goes_to_angle_rad.cos();
 
                 let dir = egui::vec2(dir_x, dir_y);
 
-                // Strength affects length (slider range 1-100)
                 let max_len = compass_radius - 5.0;
                 let min_len = 10.0;
                 let strength_ratio = (params.wind_strength.saturating_sub(1)) as f32 / 99.0;
                 let length = min_len + strength_ratio * (max_len - min_len);
 
-                // Center the arrow within the compass
                 let arrow_base = center - dir * length / 2.0;
                 let arrow_vec = dir * length;
 
@@ -944,7 +1010,6 @@ fn ui_system(
                     egui::Stroke::new(3.0, egui::Color32::from_rgb(255, 100, 100)),
                 );
 
-                // Draw strength text below the compass
                 let strength_text = format!("{} km/h", params.wind_strength);
                 painter.text(
                     rect.center() + egui::vec2(0.0, compass_radius + 5.0),
@@ -956,6 +1021,17 @@ fn ui_system(
             });
     }
 }
+
+fn space_pause_resume_system(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut playback: ResMut<PlaybackControl>,
+) {
+    // Only act on the frame the spacebar is pressed (not held)
+    if keys.just_pressed(KeyCode::Space) {
+        playback.paused = !playback.paused;
+    }
+}
+
 fn load_simulation_data() -> Option<GridData> {
     let file = File::open("assets/simulation.json").ok()?;
     serde_json::from_reader(BufReader::new(file)).ok()
