@@ -20,7 +20,6 @@ struct GridData {
     height: usize,
     steps: Vec<Vec<Vec<String>>>,
 }
-
 #[derive(Resource)]
 struct Simulation {
     frames: Vec<Vec<Vec<String>>>,
@@ -28,10 +27,8 @@ struct Simulation {
     width: usize,
     height: usize,
 }
-
 #[derive(Resource, Default)]
 struct FrameTimer(Timer);
-
 #[derive(Resource, Default)]
 struct SimulationParams {
     width: u32,
@@ -44,22 +41,18 @@ struct SimulationParams {
     number_of_steps: u32,
     trigger_simulation: bool,
 }
-
 #[derive(Resource)]
 struct LoadingScreen(bool);
-
 #[derive(Resource)]
 struct CachedAssets {
     meshes: HashMap<&'static str, Handle<Mesh>>,
     materials: HashMap<&'static str, Handle<StandardMaterial>>,
 }
-
 #[derive(Resource, Default)]
 struct PendingSimulation {
     handle: Option<thread::JoinHandle<()>>,
     result: Arc<Mutex<Option<GridData>>>,
 }
-
 #[derive(Resource, Default)]
 struct PlaybackControl {
     paused: bool,
@@ -70,7 +63,6 @@ struct PlaybackControl {
     speed: f32,
     jump_to_frame: Option<usize>,
 }
-
 #[derive(Resource, Clone)]
 struct SimulationStats {
     trees_over_time: Vec<i64>,
@@ -80,38 +72,43 @@ struct SimulationStats {
     burning_grasses_over_time: Vec<i64>,
     grass_ashes_over_time: Vec<i64>,
 }
-
 impl SimulationStats {
-    fn new(total_frames: usize) -> Self {
-        Self {
+    // Modify the `new` function to potentially take initial frame data
+    fn new(total_frames: usize, initial_stats: Option<(i64, i64, i64, i64, i64, i64)>) -> Self {
+        let mut stats = Self {
             trees_over_time: vec![0; total_frames],
             burning_trees_over_time: vec![0; total_frames],
             tree_ashes_over_time: vec![0; total_frames],
             grasses_over_time: vec![0; total_frames],
             burning_grasses_over_time: vec![0; total_frames],
             grass_ashes_over_time: vec![0; total_frames],
+        };
+
+        if let Some((t, bt, ta, g, bg, ga)) = initial_stats {
+            stats.trees_over_time[0] = t;
+            stats.burning_trees_over_time[0] = bt;
+            stats.tree_ashes_over_time[0] = ta;
+            stats.grasses_over_time[0] = g;
+            stats.burning_grasses_over_time[0] = bg;
+            stats.grass_ashes_over_time[0] = ga;
         }
+        stats
     }
 }
-
 #[derive(Component)]
 struct CellEntity;
 #[derive(Component)]
 struct MainCamera;
 #[derive(Component)]
 struct SimulationEntity;
-
 #[derive(Resource)]
 struct LoadingTextTimer {
     timer: Timer,
     dot_count: usize,
 }
-
 #[derive(Component)]
 struct FlyCamera;
-
 // ───────────────────────────── App entry ────────────────────────────────
-
 fn main() {
     App::new()
         .insert_resource(ClearColor(Color::rgb(0.05, 0.05, 0.1)))
@@ -138,7 +135,7 @@ fn main() {
             dot_count: 0,
         })
         // placeholder stats so systems can run before first sim loads
-        .insert_resource(SimulationStats::new(1))
+        .insert_resource(SimulationStats::new(1, None))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "🔥 Forest Fire Simulation 3D".into(),
@@ -163,7 +160,6 @@ fn main() {
         .add_systems(Update, camera_movement_system)
         .run();
 }
-
 fn camera_movement_system(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -176,15 +172,12 @@ fn camera_movement_system(
         Ok(t) => t,
         Err(_) => return,
     };
-
     // ─────── Movement ───────
     let mut direction = Vec3::ZERO;
     let forward: Vec3 = transform.forward().into();
     let right: Vec3 = transform.right().into();
     let up = Vec3::Y;
-
     let speed = 200.0 * time.delta_seconds();
-
     if keys.pressed(KeyCode::KeyW) {
         direction += forward;
     }
@@ -203,20 +196,16 @@ fn camera_movement_system(
     if keys.pressed(KeyCode::KeyQ) {
         direction -= up;
     }
-
     transform.translation += direction * speed;
-
     for ev in scroll.read() {
         transform.translation += forward * ev.y * 20.0;
     }
-
     // ─────── Rotation ───────
     if buttons.pressed(MouseButton::Left) {
         let mut delta = Vec2::ZERO;
         for ev in mouse_motion_events.read() {
             delta += ev.delta;
         }
-
         if delta.length_squared() > 0.0 {
             let yaw = Quat::from_rotation_y(-delta.x * 0.002);
             let pitch = Quat::from_rotation_x(-delta.y * 0.002);
@@ -225,9 +214,7 @@ fn camera_movement_system(
         }
     }
 }
-
 // ───────────────────────────── Asset setup ─────────────────────────────
-
 fn setup_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -251,7 +238,6 @@ fn setup_assets(
         meshes.add(Mesh::from(Cylinder::new(5.0, 0.2))),
     );
     mesh_map.insert("burning_leaves", mesh_map["leaves"].clone());
-
     let mut mat_map = HashMap::new();
     mat_map.insert(
         "trunk",
@@ -313,15 +299,12 @@ fn setup_assets(
             ..default()
         }),
     );
-
     commands.insert_resource(CachedAssets {
         meshes: mesh_map,
         materials: mat_map,
     });
 }
-
 // ───────────────────────── Simulation start ────────────────────────────
-
 fn start_simulation_button_system(
     mut commands: Commands,
     mut params: ResMut<SimulationParams>,
@@ -332,13 +315,10 @@ fn start_simulation_button_system(
     if !params.trigger_simulation || loading.0 {
         return;
     }
-
     for e in old_entities.iter() {
         commands.entity(e).despawn_recursive();
     }
-
     loading.0 = true;
-
     let result = Arc::new(Mutex::new(None));
     let cmd = format!(
         "sh run-sim.sh {} {} {} {} {} {} {} {}",
@@ -352,7 +332,6 @@ fn start_simulation_button_system(
         params.number_of_steps
     );
     let result_clone = Arc::clone(&result);
-
     let handle = thread::spawn(move || {
         let mut child = Command::new("sh")
             .arg("-c")
@@ -360,26 +339,21 @@ fn start_simulation_button_system(
             .stdout(Stdio::piped())
             .spawn()
             .expect("failed to launch Scala sim");
-
         if let Some(stdout) = child.stdout.take() {
             for line in BufReader::new(stdout).lines().flatten() {
                 println!("[Scala]: {}", line);
             }
         }
-
         let _ = child.wait();
         if let Some(data) = load_simulation_data() {
             *result_clone.lock().unwrap() = Some(data);
         }
     });
-
     pending.handle = Some(handle);
     pending.result = result;
     params.trigger_simulation = false;
 }
-
 // ───────────────────────── Spawn camera & lights ─────────────────────────
-
 fn spawn_camera(commands: &mut Commands) {
     commands.spawn((
         Camera3dBundle {
@@ -390,7 +364,6 @@ fn spawn_camera(commands: &mut Commands) {
         FlyCamera,
         SimulationEntity,
     ));
-
     commands.spawn((
         DirectionalLightBundle {
             transform: Transform::from_xyz(0.0, 200.0, 100.0).looking_at(Vec3::ZERO, Vec3::Y),
@@ -403,7 +376,6 @@ fn spawn_camera(commands: &mut Commands) {
         },
         SimulationEntity,
     ));
-
     commands.spawn((
         PointLightBundle {
             transform: Transform::from_xyz(100.0, 150.0, 100.0),
@@ -417,15 +389,12 @@ fn spawn_camera(commands: &mut Commands) {
         },
         SimulationEntity,
     ));
-
     commands.insert_resource(AmbientLight {
         color: Color::WHITE,
         brightness: 0.2,
     });
 }
-
 // ───────────────────────── Check sim ready ─────────────────────────────
-
 fn check_simulation_ready_system(
     mut commands: Commands,
     mut loading: ResMut<LoadingScreen>,
@@ -435,18 +404,37 @@ fn check_simulation_ready_system(
     if !loading.0 {
         return;
     }
-
     // Scope the immutable borrow of pending.result so it ends before we do `*pending = …`
     let data_opt = {
         let guard = pending.result.lock().unwrap();
         guard.clone()
     };
-
     if let Some(data) = data_opt {
         let total_frames = data.steps.len();
-        commands.insert_resource(SimulationStats::new(total_frames));
-        let frames = data.steps;
+        let first_frame_data = &data.steps[0];
 
+        // Calculate initial stats for frame 0
+        let (mut t, mut bt, mut ta, mut g, mut bg, mut ga) = (0, 0, 0, 0, 0, 0);
+        for row in first_frame_data.iter() {
+            for cell in row.iter() {
+                match cell.as_str() {
+                    "T" => t += 1,
+                    "*" => bt += 1,
+                    "G" => g += 1,
+                    "A" => ta += 1,
+                    "+" => bg += 1,
+                    "-" => ga += 1,
+                    _ => {}
+                }
+            }
+        }
+
+        commands.insert_resource(SimulationStats::new(
+            total_frames,
+            Some((t, bt, ta, g, bg, ga)),
+        ));
+
+        let frames = data.steps;
         // start at index 0
         let start_frame = 0;
         commands.insert_resource(Simulation {
@@ -455,19 +443,14 @@ fn check_simulation_ready_system(
             width: data.width,
             height: data.height,
         });
-
         spawn_camera(&mut commands);
-
         playback.paused = true;
         playback.jump_to_frame = Some(start_frame);
-
         loading.0 = false;
         *pending = PendingSimulation::default();
     }
 }
-
 // ─────────────────────── Frame advance system ────────────────────────
-
 fn advance_frame_system(
     mut commands: Commands,
     time: Res<Time>,
@@ -482,14 +465,12 @@ fn advance_frame_system(
         Some(s) => s,
         None => return,
     };
-
     // 1) update timer to match speed slider
     if timer.0.duration().as_secs_f32() != playback.speed {
         timer
             .0
             .set_duration(std::time::Duration::from_secs_f32(playback.speed));
     }
-
     // 2) bail if paused + no explicit step/jump
     if playback.paused
         && !playback.step_forward
@@ -498,18 +479,15 @@ fn advance_frame_system(
     {
         return;
     }
-
     // 3) require either a timer tick or an explicit step/jump
     let ticked = timer.0.tick(time.delta()).just_finished();
     if !ticked && playback.jump_to_frame.is_none() && !playback.step_forward && !playback.step_back
     {
         return;
     }
-
     // save old index for stats
     let prev = sim.current;
     let last = sim.frames.len() - 1;
-
     // 4) decide the next index
     let mut next = sim.current;
     if let Some(jump) = playback.jump_to_frame.take() {
@@ -531,21 +509,17 @@ fn advance_frame_system(
             playback.paused = true;
         }
     }
-
     sim.current = next;
-
     // 5) despawn old frame
     for ent in cells.iter() {
         commands.entity(ent).despawn_recursive();
     }
-
     // 6) render the new current frame
     let grid = &sim.frames[sim.current];
     let cell_size = 10.0;
     let spacing = 1.5;
     let offset_x = -(sim.width as f32 * cell_size * spacing) / 2.0;
     let offset_z = -(sim.height as f32 * cell_size * spacing) / 2.0;
-
     let (mut t, mut bt, mut ta, mut g, mut bg, mut ga) = (0, 0, 0, 0, 0, 0);
     for (y, row) in grid.iter().enumerate() {
         for (x, cell) in row.iter().enumerate() {
@@ -579,7 +553,7 @@ fn advance_frame_system(
                         "A" => ta += 1,
                         "+" => bg += 1,
                         "-" => ga += 1,
-                        _ => ta += 1,
+                        _ => {}
                     }
                     spawn_cell(
                         &mut commands,
@@ -591,17 +565,17 @@ fn advance_frame_system(
             }
         }
     }
-
-    // 7) update stats only on forward motion within bounds
-    if sim.current > prev {
-        update_stats(&mut stats, prev, sim.current, t, bt, ta, g, bg, ga);
+    // 7) update stats only on forward motion within bounds, or if jumping to a frame
+    //    We also need to update stats if the current frame is 0 and it was just loaded
+    //    (handled by the initial stats in `check_simulation_ready_system`).
+    //    For subsequent frames, update only when moving forward or explicitly jumping.
+    if sim.current > prev || (sim.current == 0 && prev == 0 && sim.frames.len() > 1) {
+        update_stats(&mut stats, sim.current, t, bt, ta, g, bg, ga);
     }
 }
-
 fn update_stats(
     stats: &mut SimulationStats,
-    start: usize,
-    end: usize,
+    idx: usize,
     trees: i64,
     burning_trees: i64,
     tree_ashes: i64,
@@ -609,16 +583,14 @@ fn update_stats(
     burning_grasses: i64,
     grass_ashes: i64,
 ) {
-    for idx in start..=end {
-        stats.trees_over_time[idx] = trees;
-        stats.burning_trees_over_time[idx] = burning_trees;
-        stats.tree_ashes_over_time[idx] = tree_ashes;
-        stats.grasses_over_time[idx] = grasses;
-        stats.burning_grasses_over_time[idx] = burning_grasses;
-        stats.grass_ashes_over_time[idx] = grass_ashes;
-    }
+    // Only update the specific index
+    stats.trees_over_time[idx] = trees;
+    stats.burning_trees_over_time[idx] = burning_trees;
+    stats.tree_ashes_over_time[idx] = tree_ashes;
+    stats.grasses_over_time[idx] = grasses;
+    stats.burning_grasses_over_time[idx] = burning_grasses;
+    stats.grass_ashes_over_time[idx] = grass_ashes;
 }
-
 fn kind_from_str(cell: &str) -> &'static str {
     match cell {
         "G" => "grass",
@@ -629,7 +601,6 @@ fn kind_from_str(cell: &str) -> &'static str {
         _ => "ash",
     }
 }
-
 fn spawn_cell(commands: &mut Commands, cache: &CachedAssets, kind: &str, pos: Vec3) {
     commands.spawn((
         PbrBundle {
@@ -642,9 +613,7 @@ fn spawn_cell(commands: &mut Commands, cache: &CachedAssets, kind: &str, pos: Ve
         SimulationEntity,
     ));
 }
-
 // ─────────────────────────── UI system ────────────────────────────────
-
 fn ui_system(
     mut contexts: EguiContexts,
     mut params: ResMut<SimulationParams>,
@@ -657,7 +626,6 @@ fn ui_system(
 ) {
     let sim_ref = sim.as_ref().map(|r| &**r);
     let ctx = contexts.ctx_mut();
-
     // ─────── Loading overlay ─────────────────────────────────────
     if loading.0 {
         text_timer.timer.tick(time.delta());
@@ -673,7 +641,6 @@ fn ui_system(
         });
         return;
     }
-
     // ─────── Side panel with controls ────────────────────────────
     egui::SidePanel::left("side_panel")
         .resizable(true)
@@ -681,7 +648,6 @@ fn ui_system(
         .show(ctx, |ui| {
             ui.heading("Simulation Controls");
             ui.separator();
-
             // Parameter sliders
             ui.add(egui::Slider::new(&mut params.width, 10..=100).text("Width"));
             ui.add(egui::Slider::new(&mut params.height, 10..=100).text("Height"));
@@ -689,7 +655,6 @@ fn ui_system(
             ui.add(
                 egui::Slider::new(&mut params.burning_grasses, 0..=100).text("Burning grasses %"),
             );
-
             ui.add(egui::Slider::new(&mut params.number_of_steps, 1..=100).text("Number of steps"));
             ui.add(egui::Checkbox::new(
                 &mut params.is_wind_toggled,
@@ -702,11 +667,9 @@ fn ui_system(
                         .text("Wind strength km/h"),
                 );
             }
-
             if ui.button("Start Simulation").clicked() {
                 params.trigger_simulation = true;
             }
-
             if let Some(sim) = sim_ref {
                 ui.separator();
                 ui.label("Playback Controls");
@@ -732,9 +695,7 @@ fn ui_system(
                         playback.jump_to_frame = Some(sim.frames.len() - 1);
                     }
                 });
-
                 ui.add(egui::Slider::new(&mut playback.speed, 0.05..=2.0).text("Speed s/frame"));
-
                 // Frame slider
                 ui.label(format!("Frame: {}/{}", sim.current + 1, sim.frames.len()));
                 let mut display_frame = sim.current + 1;
@@ -744,9 +705,7 @@ fn ui_system(
                 {
                     playback.jump_to_frame = Some(display_frame - 1);
                 }
-
                 ui.separator();
-
                 // ─────── Graphs ────────────────────────────────────────
                 ui.collapsing("Graphs", |ui| {
                     ui.label("Tree Status");
@@ -779,7 +738,6 @@ fn ui_system(
                             plot_ui.line(Line::new(burning).name("Burning"));
                             plot_ui.line(Line::new(ashes).name("Ashes"));
                         });
-
                     ui.separator();
                     ui.label("Grass Status");
                     Plot::new("Grasses")
@@ -815,7 +773,6 @@ fn ui_system(
             }
         });
 }
-
 fn load_simulation_data() -> Option<GridData> {
     let file = File::open("assets/simulation.json").ok()?;
     serde_json::from_reader(BufReader::new(file)).ok()
