@@ -15,6 +15,7 @@ object Main extends App {
   val defaultWindAngle = 0
   val defaultWindStrength = 1
 
+  // Parse command-line args or fall back to defaults
   val filteredArgs = args.dropWhile(_ == "--")
   val parsedArgs = filteredArgs.map(_.toIntOption).toList
   val finalArgs = (parsedArgs ++ List(
@@ -41,24 +42,32 @@ object Main extends App {
     s"Using parameters: width=$width, height=$height, onFireTreesPercent=$onFireTreesPercent, onFireGrassPercent=$onFireGrassPercent, isWindEnable=$enableWind, windAngle=$windAngleArg, windStrength=$windStrengthArg"
   )
 
+  // Read existing control JSON or default
   val initialControl = Try(
-  Json.parse(Source.fromFile("assets/sim_control.json").mkString)
-).getOrElse(Json.obj())
+    Json.parse(Source.fromFile("assets/sim_control.json").mkString)
+  ).getOrElse(Json.obj())
 
-val initWindAngle = (initialControl \ "windAngle").asOpt[Int].getOrElse(windAngleArg)
-val initWindStrength = (initialControl \ "windStrength").asOpt[Int].getOrElse(windStrengthArg)
-val initIsWindEnabled = (initialControl \ "windEnabled").asOpt[Boolean].getOrElse(enableWind == 1)
+  val initWindAngle =
+    (initialControl \ "windAngle").asOpt[Int].getOrElse(windAngleArg)
+  val initWindStrength =
+    (initialControl \ "windStrength").asOpt[Int].getOrElse(windStrengthArg)
+  val initIsWindEnabled =
+    (initialControl \ "windEnabled").asOpt[Boolean].getOrElse(enableWind == 1)
 
-var grid = new Grid(width, height)
-  .igniteRandomFires(onFireTreesPercent, onFireGrassPercent)
-  .nextStep(initIsWindEnabled, initWindAngle, initWindStrength) // Apply wind to the first step
+  // --- Initialize grid WITHOUT an extra step ---
+  var grid = new Grid(width, height)
+    .igniteRandomFires(onFireTreesPercent, onFireGrassPercent)
 
+  // Write metadata and the true initial frame
   Using.resource(new PrintWriter("assets/simulation_stream.ndjson")) { out =>
     val metadata = Json.obj("width" -> width, "height" -> height)
     out.println(Json.stringify(metadata))
     out.println(Json.stringify(Json.toJson(grid.encodeCells)))
   }
 
+  Thread.sleep(100)
+
+  // Append subsequent frames in loop
   val out = new FileWriter("assets/simulation_stream.ndjson", true)
   var lastStepSeen: Boolean = false
 

@@ -294,7 +294,7 @@ fn start_simulation_button_system(
 
     // 2) Show loading screen and pause playback
     loading.0 = true;
-    playback.paused = false;
+    playback.paused = true;
     playback.jump_to_frame = Some(0);
 
     // 3) Kill old NDJSON tailer thread
@@ -386,7 +386,7 @@ fn simulation_update_system(
                 if let Some(ref mut sim) = sim {
                     sim.frames.push(frame.clone());
 
-                    if sim.frames.len() >= 2 && loading.0 {
+                    if sim.frames.len() >= 1 && loading.0 {
                         loading.0 = false;
                         playback.paused = false;
                         spawn_scene(&mut commands);
