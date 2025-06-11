@@ -45,7 +45,6 @@ struct SimulationParams {
     is_wind_toggled: bool,
     wind_angle: u32,
     wind_strength: u32,
-    number_of_steps: u32,
     trigger_simulation: bool,
 }
 
@@ -69,9 +68,9 @@ fn read_sim_control() -> SimControl {
     }
 }
 
-// Updates only the Some fields (merges)
 fn update_sim_control(update: SimControl) {
     let mut control = read_sim_control();
+
     if let Some(val) = update.windAngle {
         control.windAngle = Some(val);
     }
@@ -84,9 +83,10 @@ fn update_sim_control(update: SimControl) {
     if let Some(val) = update.paused {
         control.paused = Some(val);
     }
-    if let Some(val) = update.step {
-        control.step = Some(val);
-    }
+
+    // Always reset step to false unless explicitly set
+    control.step = update.step.or(Some(false));
+
     let json = serde_json::to_string_pretty(&control).unwrap();
     fs::write(CONTROL_PATH, json).expect("Failed to write sim_control.json");
 }
@@ -236,7 +236,6 @@ fn main() {
             is_wind_toggled: false,
             wind_angle: 0,
             wind_strength: 1,
-            number_of_steps: 20,
             trigger_simulation: false,
         })
         .insert_resource(SimulationStats::new(1, None))
@@ -327,7 +326,6 @@ fn start_simulation_button_system(
         (params.is_wind_toggled as i32).to_string(),
         params.wind_angle.to_string(),
         params.wind_strength.to_string(),
-        params.number_of_steps.to_string(),
     ];
     let full_cmd = format!("sh run-sim-ndjson.sh {}", cmdline.join(" "));
     thread::spawn(move || {
@@ -640,8 +638,12 @@ fn advance_frame_system(
         }
         playback.step_back = false;
     } else if playback.step_forward {
-        next = (next + 1).min(last);
-        playback.step_forward = false;
+        if sim.current + 1 >= sim.frames.len() {
+            // Do nothing yet — wait for frame to be received
+        } else {
+            next = sim.current + 1;
+            playback.step_forward = false;
+        }
     } else if !playback.paused && ticked {
         if next < last {
             next += 1;
@@ -834,7 +836,6 @@ fn ui_system(
             ui.add(
                 egui::Slider::new(&mut params.burning_grasses, 0..=100).text("Burning grasses %"),
             );
-            ui.add(egui::Slider::new(&mut params.number_of_steps, 1..=100).text("Number of steps"));
             ui.add(egui::Checkbox::new(
                 &mut params.is_wind_toggled,
                 "Enable wind",
@@ -846,6 +847,7 @@ fn ui_system(
                     egui::Slider::new(&mut params.wind_strength, 1..=100)
                         .text("Wind strength km/h"),
                 );
+
                 if ui.button("Update Wind").clicked() {
                     update_sim_control(SimControl {
                         windAngle: Some(params.wind_angle as i32),
@@ -882,7 +884,13 @@ fn ui_system(
                         });
                     }
                     if ui.small_button("⏭").clicked() {
-                        playback.step_forward = true;
+                        if sim.current + 1 >= sim.frames.len() {
+                            update_sim_control(SimControl {
+                                step: Some(true),
+                                ..Default::default()
+                            });
+                        }
+                        playback.step_forward = true; // always try to step regardless
                     }
                     if ui.small_button("⏭|").clicked() {
                         playback.jump_to_frame = Some(sim.frames.len().saturating_sub(1));
@@ -890,6 +898,7 @@ fn ui_system(
                 });
 
                 ui.add(egui::Slider::new(&mut playback.speed, 0.05..=2.0).text("Speed s/frame"));
+
                 ui.label(format!("Frame: {}/{}", sim.current + 1, sim.frames.len()));
 
                 let mut display_frame = sim.current + 1;
@@ -898,13 +907,6 @@ fn ui_system(
                     .changed()
                 {
                     playback.jump_to_frame = Some(display_frame - 1);
-                }
-
-                if playback.paused && ui.button("Step One Frame").clicked() {
-                    update_sim_control(SimControl {
-                        step: Some(true),
-                        ..Default::default()
-                    });
                 }
 
                 ui.separator();
@@ -920,7 +922,6 @@ fn ui_system(
                 }
             }
         });
-
     // ─────────── Graphs ────────────────────
     if let Some(sim) = sim_ref {
         let available = stats.trees_over_time.len();
@@ -1078,6 +1079,155 @@ fn ui_system(
                         });
                 });
         }
+    }
+    if params.is_wind_toggled {
+        egui::Area::new("wind_indicator")
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 20.0))
+            .show(ctx, |ui| {
+                let desired_size = egui::vec2(120.0, 140.0);
+
+                let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+
+                let painter = ui.painter();
+
+                let center = rect.center() - egui::vec2(0.0, 10.0);
+
+                // Draw compass background
+
+                let compass_radius = 50.0;
+
+                painter.circle_stroke(
+                    center,
+                    compass_radius,
+                    egui::Stroke::new(1.0, egui::Color32::GRAY),
+                );
+
+                painter.text(
+                    center + egui::vec2(0.0, -(compass_radius + 5.0)),
+                    egui::Align2::CENTER_CENTER,
+                    "N",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+
+                painter.text(
+                    center + egui::vec2(0.0, compass_radius + 5.0),
+                    egui::Align2::CENTER_CENTER,
+                    "S",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+
+                painter.text(
+                    center + egui::vec2(compass_radius + 5.0, 0.0),
+                    egui::Align2::CENTER_CENTER,
+                    "E",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+
+                painter.text(
+                    center + egui::vec2(-(compass_radius + 5.0), 0.0),
+                    egui::Align2::CENTER_CENTER,
+                    "W",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+
+                // Calculate arrow properties
+
+                // The angle from the slider indicates where the wind is COMING FROM.
+
+                // The arrow should point in the direction the wind is GOING TO.
+
+                // For 0 degrees to be North, and rotate clockwise for increasing angles:
+
+                // Egui's +Y is down, +X is right.
+
+                // North (0 deg) should be straight up (-Y).
+
+                // East (90 deg) should be straight right (+X).
+
+                // South (180 deg) should be straight down (+Y).
+
+                // West (270 deg) should be straight left (-X).
+
+                // Convert angle from degrees to radians, adjust for coordinate system.
+
+                // 0 degrees North (up) in Egui is -PI/2 or 270 degrees in standard math unit circle.
+
+                // Clockwise rotation means increasing angle reduces Y and increases X for first quadrant.
+
+                let wind_goes_to_angle_rad = (params.wind_angle as f32).to_radians();
+
+                // To make 0 degrees point North and rotate clockwise:
+
+                // Egui's coordinate system: +X right, +Y down.
+
+                // North: (0, -1)
+
+                // East:  (1, 0)
+
+                // South: (0, 1)
+
+                // West:  (-1, 0)
+
+                // We want:
+
+                // Angle 0 (N) -> (0, -1)
+
+                // Angle 90 (E) -> (1, 0)
+
+                // Angle 180 (S) -> (0, 1)
+
+                // Angle 270 (W) -> (-1, 0)
+
+                // This mapping is achieved by `(sin(angle), cos(angle))` if 0 degrees is positive X
+
+                // and positive angle is counter-clockwise.
+
+                // Since our angle is already clockwise from North, we can directly use:
+
+                let dir_x = wind_goes_to_angle_rad.sin();
+
+                let dir_y = -wind_goes_to_angle_rad.cos(); // Negate cos to make North point up (-Y)
+
+                let dir = egui::vec2(dir_x, dir_y);
+
+                // Strength affects length (slider range 1-100)
+
+                let max_len = compass_radius - 5.0;
+
+                let min_len = 10.0;
+
+                let strength_ratio = (params.wind_strength.saturating_sub(1)) as f32 / 99.0;
+
+                let length = min_len + strength_ratio * (max_len - min_len);
+
+                // Center the arrow within the compass
+
+                let arrow_base = center - dir * length / 2.0;
+
+                let arrow_vec = dir * length;
+
+                painter.arrow(
+                    arrow_base,
+                    arrow_vec,
+                    egui::Stroke::new(3.0, egui::Color32::from_rgb(255, 100, 100)),
+                );
+
+                // Draw strength text below the compass
+
+                let strength_text = format!("{} km/h", params.wind_strength);
+
+                painter.text(
+                    rect.center() + egui::vec2(0.0, compass_radius + 5.0),
+                    egui::Align2::CENTER_CENTER,
+                    strength_text,
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+            });
     }
 }
 
