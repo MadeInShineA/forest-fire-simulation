@@ -4,4 +4,4 @@
 .scalafmt.conf
 project/
 target/
-assets/
+assets/*

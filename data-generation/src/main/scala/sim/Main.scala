@@ -55,6 +55,8 @@ object Main extends App {
       // "onFireGrassPercent" -> onFireGrassPercent
     )
     out.println(Json.stringify(metadata))
+
+    out.println(Json.stringify(Json.toJson(grid.encodeCells)))
   }
 
   // Now append frames to NDJSON forever (live mode)

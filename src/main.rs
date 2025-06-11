@@ -308,6 +308,16 @@ fn start_simulation_button_system(
     // 4) remove old stream file
     let _ = std::fs::remove_file("assets/simulation_stream.ndjson");
 
+    // 6) hook up new tailer
+    let (_tx, rx) = unbounded::<SimulationFrameMsg>();
+    commands.insert_resource(NdjsonChannel(rx));
+    let handle = spawn_ndjson_tailer(
+        _tx,
+        "assets/simulation_stream.ndjson".to_string(),
+        kill_switch.0.clone(),
+    );
+    ndjson_handle.0 = Some(handle);
+
     // 5) launch backend
     let cmdline = vec![
         params.width.to_string(),
@@ -329,16 +339,6 @@ fn start_simulation_button_system(
             .spawn();
     });
 
-    // 6) hook up new tailer
-    let (_tx, rx) = unbounded::<SimulationFrameMsg>();
-    commands.insert_resource(NdjsonChannel(rx));
-    let handle = spawn_ndjson_tailer(
-        _tx,
-        "assets/simulation_stream.ndjson".to_string(),
-        kill_switch.0.clone(),
-    );
-    ndjson_handle.0 = Some(handle);
-
     // 7) clear old Simulation & stats
     commands.remove_resource::<Simulation>();
     commands.insert_resource(SimulationStats::new(1, None));
@@ -355,17 +355,16 @@ fn start_simulation_button_system(
 fn simulation_update_system(
     mut commands: Commands,
     ndjson: Res<NdjsonChannel>,
-    maybe_sim: Option<ResMut<Simulation>>,
     mut stats: ResMut<SimulationStats>,
     mut loading: ResMut<LoadingScreen>,
     mut playback: ResMut<PlaybackControl>,
+    mut sim: Option<ResMut<Simulation>>,
+    mut has_started: Local<bool>,
 ) {
-    let mut sim_ref = maybe_sim;
-
     while let Ok(msg) = ndjson.0.try_recv() {
         match msg {
             SimulationFrameMsg::Metadata { width, height } => {
-                // Create new simulation resource
+                // Initialize Simulation resource
                 commands.insert_resource(Simulation {
                     frames: Vec::new(),
                     current: 0,
@@ -373,17 +372,17 @@ fn simulation_update_system(
                     height,
                 });
 
-                // Reset stats
+                // Reset stats and playback
                 commands.insert_resource(SimulationStats::new(1, None));
-
-                // Reset playback
                 playback.paused = true;
                 playback.jump_to_frame = Some(0);
+
+                *has_started = true;
             }
 
             SimulationFrameMsg::Frame(frame) => {
-                println!("Got frame, len: {}", frame.len());
-                if let Some(ref mut sim) = sim_ref {
+                // If Simulation is available, push frame
+                if let Some(ref mut sim) = sim {
                     sim.frames.push(frame.clone());
 
                     if sim.frames.len() >= 2 && loading.0 {
@@ -392,7 +391,7 @@ fn simulation_update_system(
                         spawn_scene(&mut commands);
                     }
 
-                    // Count cell types for stats
+                    // Update stats
                     let mut trees = 0;
                     let mut burning_trees = 0;
                     let mut tree_ashes = 0;
@@ -416,7 +415,6 @@ fn simulation_update_system(
 
                     let frame_index = sim.frames.len() - 1;
 
-                    // Ensure stats have enough room
                     if stats.trees_over_time.len() <= frame_index {
                         stats.trees_over_time.push(trees);
                         stats.burning_trees_over_time.push(burning_trees);
@@ -434,11 +432,53 @@ fn simulation_update_system(
                     }
 
                     stats.frame_counter = sim.frames.len();
+                } else if *has_started {
+                    // Simulation resource was just inserted but system didn't get fresh ResMut yet
+                    // Insert manually with first frame
+                    let width = frame[0].len();
+                    let height = frame.len();
+                    commands.insert_resource(Simulation {
+                        frames: vec![frame.clone()],
+                        current: 0,
+                        width,
+                        height,
+                    });
+
+                    stats.frame_counter = 1;
+
+                    // Update stats for frame 0
+                    let mut trees = 0;
+                    let mut burning_trees = 0;
+                    let mut tree_ashes = 0;
+                    let mut grasses = 0;
+                    let mut burning_grasses = 0;
+                    let mut grass_ashes = 0;
+
+                    for row in &frame {
+                        for cell in row {
+                            match cell.as_str() {
+                                "T" => trees += 1,
+                                "*" | "**" | "***" => burning_trees += 1,
+                                "A" => tree_ashes += 1,
+                                "G" => grasses += 1,
+                                "+" => burning_grasses += 1,
+                                "-" => grass_ashes += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    stats.trees_over_time = vec![trees];
+                    stats.burning_trees_over_time = vec![burning_trees];
+                    stats.tree_ashes_over_time = vec![tree_ashes];
+                    stats.grasses_over_time = vec![grasses];
+                    stats.burning_grasses_over_time = vec![burning_grasses];
+                    stats.grass_ashes_over_time = vec![grass_ashes];
                 }
             }
 
             SimulationFrameMsg::SimulationEnded => {
-                // (optional) Handle end-of-simulation logic
+                // Optional: handle graceful shutdown
             }
         }
     }
