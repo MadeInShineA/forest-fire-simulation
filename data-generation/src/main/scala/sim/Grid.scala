@@ -37,22 +37,17 @@ case class Grid(
     width: Int,
     height: Int,
     cells: Vector[Vector[Cell]],
-    ashRegrowSteps: Int = 7, // Steps for tree (ash) regrowth
-    burnedGrassRegrowSteps: Int = 4, // Steps for grass regrowth
-
-    treeIgniteProb: Double = 0.2, // Probability tree ignites from neighbor
-    grassIgniteProb: Double = 0.4, // Probability grass ignites from neighbor
-
-    windStrengthFactor: Double = 20.0, // Wind impact factor (spread/jump boost)
-    windMinBoost: Double = 0.2, // Minimum wind boost for spread
-    windStrongMin: Int = 25, // Wind strength threshold for zero boost
-
-    fireJumpBaseChance: Double = 0.01, // Base chance for fire jump
-    fireJumpDistFactor: Double =
-      10.0, // How far fire can jump (windStrength / this)
-    ashToTreeProb: Double = 0.5, // probability Ash -> Tree; (1-p) -> Grass
-    burnedGrassToGrassProb: Double =
-      0.85 // probability BurnedGrass -> Grass; (1-p) -> Tree
+    ashRegrowSteps: Int = 7,
+    burnedGrassRegrowSteps: Int = 4,
+    treeIgniteProb: Double = 0.2,
+    grassIgniteProb: Double = 0.4,
+    windStrengthFactor: Double = 20.0,
+    windMinBoost: Double = 0.2,
+    windStrongMin: Int = 25,
+    fireJumpBaseChance: Double = 0.01,
+    fireJumpDistFactor: Double = 10.0,
+    ashToTreeProb: Double = 0.5,
+    burnedGrassToGrassProb: Double = 0.85
 ) {
 
   def this(width: Int, height: Int) = {
@@ -180,7 +175,7 @@ case class Grid(
     val burningTrees: Set[CellType] =
       Set(BurningTree1, BurningTree2, BurningTree3)
 
-    // Wind boost for each neighbor
+    // Improved wind boost: smooth, exponential scaling with angle
     def windBoost(dx: Int, dy: Int): Double = {
       if (!enableWind) 1.0
       else {
@@ -189,15 +184,8 @@ case class Grid(
         else {
           val dir = (dx / nrm, dy / nrm)
           val alignment = windVec._1 * dir._1 + windVec._2 * dir._2 // -1 to 1
-
-          val minBoost =
-            if (windStrength >= windStrongMin) 0.0
-            else windMinBoost
-
-          val boost = 1.0 + alignment * (windStrength / windStrengthFactor)
-          if (alignment < -0.7 && windStrength >= windStrongMin)
-            0.0 // almost upwind, strong wind
-          else boost.max(minBoost).min(2.0)
+          val rawBoost = math.exp(alignment * windStrength / windStrengthFactor)
+          rawBoost.max(windMinBoost).min(2.5)
         }
       }
     }
@@ -262,12 +250,12 @@ case class Grid(
       }
     }
 
-    // Fire jump (spotting)
+    // Fire jump (spotting): random jump direction around wind
     val jumpChance =
       fireJumpBaseChance * (1 + windStrength / windStrengthFactor)
     val maxJumpDist = math.ceil(windStrength / fireJumpDistFactor).toInt max 1
 
-    // Compute fire jump targets
+    // Compute fire jump targets with angular spread
     val jumpCells = (for {
       y <- 0 until height
       x <- 0 until width
@@ -276,8 +264,12 @@ case class Grid(
       if rand.nextDouble() < jumpChance
     } yield {
       val dist = rand.nextInt(maxJumpDist) + 1 // [1, maxJumpDist]
-      val dx = math.round(windVec._1 * dist).toInt
-      val dy = math.round(windVec._2 * dist).toInt
+      val angleDeviation =
+        rand.nextGaussian() * (math.Pi / 8) // 22.5 deg stddev
+      val jumpAngle = windRad + angleDeviation
+
+      val dx = math.round(math.sin(jumpAngle) * dist).toInt
+      val dy = math.round(-math.cos(jumpAngle) * dist).toInt
       val tx = x + dx
       val ty = y + dy
       (tx, ty)
