@@ -3,15 +3,25 @@ use bevy::input::ButtonInput;
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
+use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
+use std::{
+    fs::File,
+    io::{BufRead, BufReader, Seek, SeekFrom},
+    path::Path,
+    sync::mpsc::channel,
+    thread,
+};
+
+// …
+
+#[derive(Resource)]
+struct FsWatcher(pub notify::RecommendedWatcher);
 
 // --- Use crossbeam_channel for thread-safe Bevy resources ---
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -161,56 +171,122 @@ struct LoadingTextTimer {
     dot_count: usize,
 }
 
-// ------------- NDJSON Tailing Thread -------------
-fn spawn_ndjson_tailer(
-    tx: Sender<SimulationFrameMsg>,
-    ndjson_path: String,
-    kill_switch: Arc<Mutex<bool>>,
-) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        // Wait for file to be created (simulate start)
-        let file = loop {
-            if *kill_switch.lock().unwrap() {
-                return;
-            }
-            if let Ok(f) = File::open(&ndjson_path) {
-                break f;
-            }
-            thread::sleep(Duration::from_millis(200));
-        };
-        let mut reader = BufReader::new(file);
-        let mut line = String::new();
-        let mut sent_metadata = false;
-        loop {
-            if *kill_switch.lock().unwrap() {
-                return;
-            }
-            line.clear();
-            let bytes = reader.read_line(&mut line).unwrap();
-            if bytes == 0 {
-                thread::sleep(Duration::from_millis(50));
-                continue;
-            }
-            let trimmed = line.trim_end();
-            if trimmed.is_empty() {
-                continue;
-            }
-            println!("NDJSON line: {trimmed}");
-            if !sent_metadata {
-                let meta: serde_json::Value = serde_json::from_str(trimmed).unwrap();
-                let width = meta["width"].as_u64().unwrap() as usize;
-                let height = meta["height"].as_u64().unwrap() as usize;
-                tx.send(SimulationFrameMsg::Metadata { width, height })
-                    .unwrap();
-                sent_metadata = true;
-            } else {
-                let frame: Vec<Vec<String>> = serde_json::from_str(trimmed).unwrap();
-                tx.send(SimulationFrameMsg::Frame(frame)).unwrap();
-            }
-        }
-    })
+#[derive(Deserialize)]
+struct FrameMeta {
+    width: usize,
+    height: usize,
 }
 
+// ------------- NDJSON Tailing Thread -------------
+
+fn spawn_ndjson_tailer(
+    tx: Sender<SimulationFrameMsg>,
+    path: &str,
+) -> notify::Result<RecommendedWatcher> {
+    // 1) Watch the parent directory so we catch the file creation + updates
+    let parent = Path::new(path)
+        .parent()
+        .expect("assets directory must exist");
+    let (tx_fs, rx_fs) = channel::<notify::Result<Event>>();
+    let mut watcher = RecommendedWatcher::new(
+        move |res| {
+            let _ = tx_fs.send(res);
+        },
+        Config::default(),
+    )?;
+    watcher.watch(parent, RecursiveMode::NonRecursive)?;
+
+    // 2) Spawn a thread to open, read the first two lines, then tail
+    let path_buf = Path::new(path).to_path_buf();
+    thread::spawn(move || {
+        // 2a) Wait until the file is created
+        let file = loop {
+            match File::open(&path_buf) {
+                Ok(f) => break f,
+                Err(_) => thread::sleep(Duration::from_millis(50)),
+            }
+        };
+        let mut reader = BufReader::new(file.try_clone().unwrap());
+        let mut position = 0u64;
+        let mut line = String::new();
+
+        // 2b) Read first non-empty line: metadata
+        let meta = loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap() > 0 {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    // skip blank
+                    continue;
+                }
+                // advance position
+                position += line.len() as u64;
+                // parse metadata
+                if let Ok(m) = serde_json::from_str::<FrameMeta>(trimmed) {
+                    break m;
+                } else {
+                    eprintln!("spawn_ndjson_tailer: first line not metadata, retrying");
+                    continue;
+                }
+            }
+            // no data yet
+            thread::sleep(Duration::from_millis(10));
+        };
+        let _ = tx.send(SimulationFrameMsg::Metadata {
+            width: meta.width,
+            height: meta.height,
+        });
+
+        // 2c) Read next non-empty line: initial frame
+        let _ = loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap() > 0 {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                position += line.len() as u64;
+                if let Ok(frame) = serde_json::from_str::<Vec<Vec<String>>>(trimmed) {
+                    let _ = tx.send(SimulationFrameMsg::Frame(frame));
+                    break;
+                } else {
+                    eprintln!("spawn_ndjson_tailer: second line not frame, retrying");
+                    continue;
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+
+        // 2d) Tail new frames on each Modify
+        while let Ok(res_event) = rx_fs.recv() {
+            if let Ok(event) = res_event {
+                if matches!(event.kind, EventKind::Modify(_)) {
+                    // seek to last read position
+                    let _ = reader.seek(SeekFrom::Start(position));
+                    // read all new lines
+                    while let Ok(n) = reader.read_line(&mut line) {
+                        if n == 0 {
+                            break;
+                        }
+                        position += n as u64;
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            if let Ok(frame) = serde_json::from_str::<Vec<Vec<String>>>(trimmed) {
+                                let _ = tx.send(SimulationFrameMsg::Frame(frame));
+                            }
+                        }
+                        line.clear();
+                    }
+                }
+            }
+        }
+
+        // 2e) Signal end-of-stream
+        let _ = tx.send(SimulationFrameMsg::SimulationEnded);
+    });
+
+    Ok(watcher)
+}
 // ------------- App Entry -------------
 fn main() {
     let kill_switch = Arc::new(Mutex::new(false));
@@ -275,8 +351,6 @@ fn main() {
 // Start Simulation Button Handler
 fn start_simulation_button_system(
     mut params: ResMut<SimulationParams>,
-    mut ndjson_handle: ResMut<NdjsonTailingHandle>,
-    kill_switch: Res<NdjsonKillSwitch>,
     mut commands: Commands,
     mut playback: ResMut<PlaybackControl>,
     mut loading: ResMut<LoadingScreen>,
@@ -297,17 +371,10 @@ fn start_simulation_button_system(
     playback.paused = true;
     playback.jump_to_frame = Some(0);
 
-    // 3) Kill old NDJSON tailer thread
-    if let Some(handle) = ndjson_handle.0.take() {
-        *kill_switch.0.lock().unwrap() = true;
-        let _ = handle.join();
-        *kill_switch.0.lock().unwrap() = false;
-    }
-
-    // 4) Remove old NDJSON simulation stream
+    // 3) Remove old NDJSON simulation stream
     let _ = std::fs::remove_file("assets/simulation_stream.ndjson");
 
-    // 5) Start the backend simulation subprocess
+    // 4) Start the backend simulation subprocess
     let cmdline = vec![
         params.width.to_string(),
         params.height.to_string(),
@@ -318,7 +385,7 @@ fn start_simulation_button_system(
         params.wind_strength.to_string(),
     ];
     let full_cmd = format!("sh run-sim-ndjson.sh {}", cmdline.join(" "));
-    thread::spawn(move || {
+    std::thread::spawn(move || {
         let _ = Command::new("sh")
             .arg("-c")
             .arg(full_cmd)
@@ -327,26 +394,23 @@ fn start_simulation_button_system(
             .spawn();
     });
 
-    // 6) Hook up a new NDJSON tailer to read simulation frames
-    let (_tx, rx) = unbounded::<SimulationFrameMsg>();
+    // 5) New: hook up a filesystem‐watcher tailer instead of manual polling
+    let (tx, rx) = unbounded::<SimulationFrameMsg>();
     commands.insert_resource(NdjsonChannel(rx));
-    let handle = spawn_ndjson_tailer(
-        _tx,
-        "assets/simulation_stream.ndjson".to_string(),
-        kill_switch.0.clone(),
-    );
-    ndjson_handle.0 = Some(handle);
+    let watcher = spawn_ndjson_tailer(tx, "assets/simulation_stream.ndjson")
+        .expect("Failed to watch NDJSON file");
+    commands.insert_resource(FsWatcher(watcher));
 
-    // 7) Clear old simulation state & insert new stats resource
+    // 6) Clear old simulation state & insert new stats resource
     commands.remove_resource::<Simulation>();
     commands.insert_resource(SimulationStats::new(1, None));
 
-    // 8) Write sim_control.json with all values (FIX for your bug)
+    // 7) Write sim_control.json with all values
     update_sim_control(SimControl {
         paused: Some(false),
-        windEnabled: Some(params.is_wind_toggled), // ✅
-        windAngle: Some(params.wind_angle as i32), // ✅
-        windStrength: Some(params.wind_strength as i32), // ✅
+        windEnabled: Some(params.is_wind_toggled),
+        windAngle: Some(params.wind_angle as i32),
+        windStrength: Some(params.wind_strength as i32),
         step: Some(false),
     });
 }
