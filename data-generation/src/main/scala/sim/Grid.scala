@@ -17,8 +17,9 @@ case class BurnedGrass(deadSteps: Int) extends CellType
 
 case class Cell(cellType: CellType)
 
-// === JSON Serialization for Compact Export ===
 object JsonFormats {
+  import play.api.libs.json._
+
   implicit val cellTypeWrites: Writes[CellType] = Writes {
     case Water          => JsString("W")
     case Grass          => JsString("G")
@@ -30,6 +31,13 @@ object JsonFormats {
     case Ash(_)         => JsString("A")
     case BurnedGrass(_) => JsString("-")
   }
+  implicit val vectorStringWrites: Writes[Vector[String]] = Writes { vs =>
+    JsArray(vs.map(JsString(_)))
+  }
+  implicit val vectorVectorStringWrites: Writes[Vector[Vector[String]]] =
+    Writes { vvs =>
+      JsArray(vvs.map(v => Json.toJson(v)))
+    }
 }
 
 // === Grid ===
