@@ -18,8 +18,6 @@ use std::{
     thread,
 };
 
-// …
-
 #[derive(Resource)]
 struct FsWatcher(pub notify::RecommendedWatcher);
 
@@ -798,6 +796,7 @@ fn spawn_cell(commands: &mut Commands, cache: &CachedAssets, kind: &str, pos: Ve
 
 // ------------- Camera movement -------------
 fn camera_movement_system(
+    mut contexts: EguiContexts,
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
@@ -805,6 +804,12 @@ fn camera_movement_system(
     mut scroll: EventReader<MouseWheel>,
     mut query: Query<&mut Transform, With<FlyCamera>>,
 ) {
+    // early-out if the mouse is over any UI (side panel, graphs, etc.)
+    let ctx = contexts.ctx_mut();
+    if ctx.wants_pointer_input() || ctx.wants_pointer_input() {
+        return;
+    }
+
     let mut transform = match query.get_single_mut() {
         Ok(t) => t,
         Err(_) => return,
@@ -814,6 +819,7 @@ fn camera_movement_system(
     let right: Vec3 = transform.right().into();
     let up = Vec3::Y;
     let speed = 200.0 * time.delta_seconds();
+
     if keys.pressed(KeyCode::KeyW) {
         direction += forward;
     }
@@ -833,9 +839,11 @@ fn camera_movement_system(
         direction -= up;
     }
     transform.translation += direction * speed;
+
     for ev in scroll.read() {
         transform.translation += forward * ev.y * 20.0;
     }
+
     if buttons.pressed(MouseButton::Left) {
         let mut delta = Vec2::ZERO;
         for ev in mouse_motion_events.read() {
@@ -874,6 +882,7 @@ fn ui_system(
     let ctx = contexts.ctx_mut();
     let sim_ref = sim.as_ref().map(|r| &**r);
 
+    // Loading screen
     if loading.0 {
         text_timer.timer.tick(time.delta());
         if text_timer.timer.just_finished() {
@@ -906,13 +915,20 @@ fn ui_system(
                 "Enable wind",
             ));
 
+            // Wind sliders only when enabled
             if params.is_wind_toggled {
                 ui.add(egui::Slider::new(&mut params.wind_angle, 0..=359).text("Wind angle °"));
                 ui.add(
                     egui::Slider::new(&mut params.wind_strength, 1..=100)
                         .text("Wind strength km/h"),
                 );
+            }
 
+            // Buttons aligned on the same line; Update Wind always visible to allow disabling
+            ui.horizontal(|ui| {
+                if ui.button("Start Simulation").clicked() {
+                    params.trigger_simulation = true;
+                }
                 if ui.button("Update Wind").clicked() {
                     update_sim_control(SimControl {
                         windAngle: Some(params.wind_angle as i32),
@@ -922,12 +938,9 @@ fn ui_system(
                         ..Default::default()
                     });
                 }
-            }
+            });
 
-            if ui.button("Start Simulation").clicked() {
-                params.trigger_simulation = true;
-            }
-
+            // Playback controls
             if let Some(sim) = sim_ref {
                 ui.separator();
                 ui.label("Playback Controls");
@@ -956,7 +969,7 @@ fn ui_system(
                                 ..Default::default()
                             });
                         }
-                        playback.step_forward = true; // always try to step regardless
+                        playback.step_forward = true;
                     }
                     if ui.small_button("⏭|").clicked() {
                         playback.jump_to_frame = Some(sim.frames.len().saturating_sub(1));
@@ -964,7 +977,6 @@ fn ui_system(
                 });
 
                 ui.add(egui::Slider::new(&mut playback.speed, 0.05..=2.0).text("Speed s/frame"));
-
                 ui.label(format!("Frame: {}/{}", sim.current + 1, sim.frames.len()));
 
                 let mut display_frame = sim.current + 1;
@@ -988,6 +1000,7 @@ fn ui_system(
                 }
             }
         });
+
     // ─────────── Graphs ────────────────────
     if let Some(sim) = sim_ref {
         let available = stats.trees_over_time.len();
