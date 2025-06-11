@@ -3,23 +3,29 @@ use bevy::input::ButtonInput;
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
-use egui_plot::{Legend, Line, Plot, PlotPoints};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
-// ─────────────────────────── Data structures ────────────────────────────
+// --- Use crossbeam_channel for thread-safe Bevy resources ---
+use crossbeam_channel::{unbounded, Receiver, Sender};
 
-#[derive(Deserialize, Clone)]
-struct GridData {
-    width: usize,
-    height: usize,
-    steps: Vec<Vec<Vec<String>>>,
+enum SimulationFrameMsg {
+    Metadata { width: usize, height: usize },
+    Frame(Vec<Vec<String>>),
+    SimulationEnded,
 }
+
+// Channel as a Bevy resource (crossbeam_channel is Sync!)
+#[derive(Resource)]
+struct NdjsonChannel(pub Receiver<SimulationFrameMsg>);
+
 #[derive(Resource)]
 struct Simulation {
     frames: Vec<Vec<Vec<String>>>,
@@ -29,7 +35,8 @@ struct Simulation {
 }
 #[derive(Resource, Default)]
 struct FrameTimer(Timer);
-#[derive(Resource, Default)]
+
+#[derive(Resource, Default, Clone)]
 struct SimulationParams {
     width: u32,
     height: u32,
@@ -41,30 +48,61 @@ struct SimulationParams {
     number_of_steps: u32,
     trigger_simulation: bool,
 }
-#[derive(Resource)]
-struct LoadingScreen(bool);
-#[derive(Resource)]
-struct CachedAssets {
-    meshes: HashMap<&'static str, Handle<Mesh>>,
-    materials: HashMap<&'static str, Handle<StandardMaterial>>,
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct SimControl {
+    pub windAngle: Option<i32>,
+    pub windStrength: Option<i32>,
+    pub windEnabled: Option<bool>,
+    pub paused: Option<bool>,
+    pub step: Option<bool>,
 }
-#[derive(Resource, Default)]
-struct PendingSimulation {
-    handle: Option<thread::JoinHandle<()>>,
-    result: Arc<Mutex<Option<GridData>>>,
+
+const CONTROL_PATH: &str = "assets/sim_control.json";
+
+// Reads current sim_control.json, or default if not found
+fn read_sim_control() -> SimControl {
+    if let Ok(content) = fs::read_to_string(CONTROL_PATH) {
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        SimControl::default()
+    }
 }
+
+// Updates only the Some fields (merges)
+fn update_sim_control(update: SimControl) {
+    let mut control = read_sim_control();
+    if let Some(val) = update.windAngle {
+        control.windAngle = Some(val);
+    }
+    if let Some(val) = update.windStrength {
+        control.windStrength = Some(val);
+    }
+    if let Some(val) = update.windEnabled {
+        control.windEnabled = Some(val);
+    }
+    if let Some(val) = update.paused {
+        control.paused = Some(val);
+    }
+    if let Some(val) = update.step {
+        control.step = Some(val);
+    }
+    let json = serde_json::to_string_pretty(&control).unwrap();
+    fs::write(CONTROL_PATH, json).expect("Failed to write sim_control.json");
+}
+
 #[derive(Resource, Default)]
 struct PlaybackControl {
     paused: bool,
     step_forward: bool,
     step_back: bool,
-    go_to_start: bool,
-    go_to_end: bool,
     speed: f32,
     jump_to_frame: Option<usize>,
 }
+
 #[derive(Resource, Clone)]
 struct SimulationStats {
+    pub frame_counter: usize,
     trees_over_time: Vec<i64>,
     burning_trees_over_time: Vec<i64>,
     tree_ashes_over_time: Vec<i64>,
@@ -73,9 +111,9 @@ struct SimulationStats {
     grass_ashes_over_time: Vec<i64>,
 }
 impl SimulationStats {
-    // Modify the `new` function to potentially take initial frame data
     fn new(total_frames: usize, initial_stats: Option<(i64, i64, i64, i64, i64, i64)>) -> Self {
         let mut stats = Self {
+            frame_counter: 0, // <-- ADD THIS LINE
             trees_over_time: vec![0; total_frames],
             burning_trees_over_time: vec![0; total_frames],
             tree_ashes_over_time: vec![0; total_frames],
@@ -83,7 +121,6 @@ impl SimulationStats {
             burning_grasses_over_time: vec![0; total_frames],
             grass_ashes_over_time: vec![0; total_frames],
         };
-
         if let Some((t, bt, ta, g, bg, ga)) = initial_stats {
             stats.trees_over_time[0] = t;
             stats.burning_trees_over_time[0] = bt;
@@ -95,26 +132,102 @@ impl SimulationStats {
         stats
     }
 }
+#[derive(Resource)]
+struct CachedAssets {
+    meshes: HashMap<&'static str, Handle<Mesh>>,
+    materials: HashMap<&'static str, Handle<StandardMaterial>>,
+}
 #[derive(Component)]
 struct CellEntity;
 #[derive(Component)]
 struct MainCamera;
 #[derive(Component)]
 struct SimulationEntity;
+#[derive(Component)]
+struct FlyCamera;
+#[derive(Resource, Default)]
+struct ShowGraphs(pub bool);
+#[derive(Resource, Default)]
+struct NdjsonTailingHandle(Option<thread::JoinHandle<()>>);
+#[derive(Resource, Default)]
+struct NdjsonKillSwitch(pub Arc<Mutex<bool>>);
+
+#[derive(Resource)]
+struct LoadingScreen(pub bool);
+
 #[derive(Resource)]
 struct LoadingTextTimer {
     timer: Timer,
     dot_count: usize,
 }
-#[derive(Component)]
-struct FlyCamera;
 
-#[derive(Resource, Default)]
-struct ShowGraphs(pub bool);
-// ───────────────────────────── App entry ────────────────────────────────
+// ------------- NDJSON Tailing Thread -------------
+fn spawn_ndjson_tailer(
+    tx: Sender<SimulationFrameMsg>,
+    ndjson_path: String,
+    kill_switch: Arc<Mutex<bool>>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        // Wait for file to be created (simulate start)
+        let file = loop {
+            if *kill_switch.lock().unwrap() {
+                return;
+            }
+            if let Ok(f) = File::open(&ndjson_path) {
+                break f;
+            }
+            thread::sleep(Duration::from_millis(200));
+        };
+        let mut reader = BufReader::new(file);
+        let mut line = String::new();
+        let mut sent_metadata = false;
+        loop {
+            if *kill_switch.lock().unwrap() {
+                return;
+            }
+            line.clear();
+            let bytes = reader.read_line(&mut line).unwrap();
+            if bytes == 0 {
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                continue;
+            }
+            println!("NDJSON line: {trimmed}");
+            if !sent_metadata {
+                let meta: serde_json::Value = serde_json::from_str(trimmed).unwrap();
+                let width = meta["width"].as_u64().unwrap() as usize;
+                let height = meta["height"].as_u64().unwrap() as usize;
+                tx.send(SimulationFrameMsg::Metadata { width, height })
+                    .unwrap();
+                sent_metadata = true;
+            } else {
+                let frame: Vec<Vec<String>> = serde_json::from_str(trimmed).unwrap();
+                tx.send(SimulationFrameMsg::Frame(frame)).unwrap();
+            }
+        }
+    })
+}
+
+// ------------- App Entry -------------
 fn main() {
+    let kill_switch = Arc::new(Mutex::new(false));
+    let (_tx, rx) = unbounded::<SimulationFrameMsg>();
+
     App::new()
         .insert_resource(ClearColor(Color::rgb(0.05, 0.05, 0.1)))
+        .insert_resource(FrameTimer(Timer::from_seconds(0.4, TimerMode::Repeating)))
+        .insert_resource(LoadingScreen(false))
+        .insert_resource(LoadingTextTimer {
+            timer: Timer::from_seconds(0.5, TimerMode::Repeating),
+            dot_count: 0,
+        })
+        .insert_resource(PlaybackControl {
+            speed: 0.4,
+            ..default()
+        })
         .insert_resource(SimulationParams {
             width: 20,
             height: 20,
@@ -126,20 +239,11 @@ fn main() {
             number_of_steps: 20,
             trigger_simulation: false,
         })
-        .insert_resource(FrameTimer(Timer::from_seconds(0.4, TimerMode::Repeating)))
-        .insert_resource(PlaybackControl {
-            speed: 0.4,
-            ..default()
-        })
-        .insert_resource(LoadingScreen(false))
-        .insert_resource(PendingSimulation::default())
-        .insert_resource(LoadingTextTimer {
-            timer: Timer::from_seconds(0.5, TimerMode::Repeating),
-            dot_count: 0,
-        })
-        // placeholder stats so systems can run before first sim loads
         .insert_resource(SimulationStats::new(1, None))
         .insert_resource(ShowGraphs(false))
+        .insert_resource(NdjsonChannel(rx))
+        .insert_resource(NdjsonTailingHandle(None))
+        .insert_resource(NdjsonKillSwitch(kill_switch.clone()))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "🔥 Forest Fire Simulation 3D".into(),
@@ -155,71 +259,192 @@ fn main() {
         .add_systems(
             Update,
             (
+                simulation_update_system,
                 ui_system,
-                start_simulation_button_system,
-                check_simulation_ready_system,
                 advance_frame_system,
+                camera_movement_system,
+                space_pause_resume_system,
+                start_simulation_button_system,
             ),
         )
-        .add_systems(Update, camera_movement_system)
-        .add_systems(Update, space_pause_resume_system)
         .run();
 }
-fn camera_movement_system(
-    time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
-    buttons: Res<ButtonInput<MouseButton>>,
-    mut mouse_motion_events: EventReader<MouseMotion>,
-    mut scroll: EventReader<MouseWheel>,
-    mut query: Query<&mut Transform, With<FlyCamera>>,
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper to spawn camera & lights for a fresh simulation run
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Start Simulation Button Handler
+fn start_simulation_button_system(
+    mut params: ResMut<SimulationParams>,
+    mut ndjson_handle: ResMut<NdjsonTailingHandle>,
+    kill_switch: Res<NdjsonKillSwitch>,
+    mut commands: Commands,
+    mut playback: ResMut<PlaybackControl>,
+    mut loading: ResMut<LoadingScreen>,
+    old_entities: Query<Entity, With<SimulationEntity>>,
 ) {
-    let mut transform = match query.get_single_mut() {
-        Ok(t) => t,
-        Err(_) => return,
-    };
-    // ─────── Movement ───────
-    let mut direction = Vec3::ZERO;
-    let forward: Vec3 = transform.forward().into();
-    let right: Vec3 = transform.right().into();
-    let up = Vec3::Y;
-    let speed = 200.0 * time.delta_seconds();
-    if keys.pressed(KeyCode::KeyW) {
-        direction += forward;
+    if !params.trigger_simulation || loading.0 {
+        return;
     }
-    if keys.pressed(KeyCode::KeyS) {
-        direction -= forward;
+    params.trigger_simulation = false;
+
+    // 1) despawn previous run
+    for e in old_entities.iter() {
+        commands.entity(e).despawn_recursive();
     }
-    if keys.pressed(KeyCode::KeyA) {
-        direction -= right;
+
+    // 2) show loading + lock UI
+    loading.0 = true;
+    playback.paused = true;
+    playback.jump_to_frame = Some(0);
+
+    // 3) kill old NDJSON tailer
+    if let Some(handle) = ndjson_handle.0.take() {
+        *kill_switch.0.lock().unwrap() = true;
+        let _ = handle.join();
+        *kill_switch.0.lock().unwrap() = false;
     }
-    if keys.pressed(KeyCode::KeyD) {
-        direction += right;
-    }
-    if keys.pressed(KeyCode::KeyE) {
-        direction += up;
-    }
-    if keys.pressed(KeyCode::KeyQ) {
-        direction -= up;
-    }
-    transform.translation += direction * speed;
-    for ev in scroll.read() {
-        transform.translation += forward * ev.y * 20.0;
-    }
-    // ─────── Rotation ───────
-    if buttons.pressed(MouseButton::Left) {
-        let mut delta = Vec2::ZERO;
-        for ev in mouse_motion_events.read() {
-            delta += ev.delta;
-        }
-        if delta.length_squared() > 0.0 {
-            let yaw = Quat::from_rotation_y(-delta.x * 0.002);
-            let pitch = Quat::from_rotation_x(-delta.y * 0.002);
-            transform.rotation = yaw * transform.rotation; // yaw around global Y
-            transform.rotation = transform.rotation * pitch; // pitch around local X
+
+    // 4) remove old stream file
+    let _ = std::fs::remove_file("assets/simulation_stream.ndjson");
+
+    // 5) launch backend
+    let cmdline = vec![
+        params.width.to_string(),
+        params.height.to_string(),
+        params.burning_trees.to_string(),
+        params.burning_grasses.to_string(),
+        (params.is_wind_toggled as i32).to_string(),
+        params.wind_angle.to_string(),
+        params.wind_strength.to_string(),
+        params.number_of_steps.to_string(),
+    ];
+    let full_cmd = format!("sh run-sim-ndjson.sh {}", cmdline.join(" "));
+    thread::spawn(move || {
+        let _ = Command::new("sh")
+            .arg("-c")
+            .arg(full_cmd)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    });
+
+    // 6) hook up new tailer
+    let (_tx, rx) = unbounded::<SimulationFrameMsg>();
+    commands.insert_resource(NdjsonChannel(rx));
+    let handle = spawn_ndjson_tailer(
+        _tx,
+        "assets/simulation_stream.ndjson".to_string(),
+        kill_switch.0.clone(),
+    );
+    ndjson_handle.0 = Some(handle);
+
+    // 7) clear old Simulation & stats
+    commands.remove_resource::<Simulation>();
+    commands.insert_resource(SimulationStats::new(1, None));
+
+    // 8) unpause backend so it starts emitting frames
+    update_sim_control(SimControl {
+        paused: Some(false),
+        ..Default::default()
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Simulation NDJSON Receiver System
+fn simulation_update_system(
+    mut commands: Commands,
+    ndjson: Res<NdjsonChannel>,
+    maybe_sim: Option<ResMut<Simulation>>,
+    mut stats: ResMut<SimulationStats>,
+    mut loading: ResMut<LoadingScreen>,
+    mut playback: ResMut<PlaybackControl>,
+) {
+    let mut sim_ref = maybe_sim;
+
+    while let Ok(msg) = ndjson.0.try_recv() {
+        match msg {
+            SimulationFrameMsg::Metadata { width, height } => {
+                // Create new simulation resource
+                commands.insert_resource(Simulation {
+                    frames: Vec::new(),
+                    current: 0,
+                    width,
+                    height,
+                });
+
+                // Reset stats
+                commands.insert_resource(SimulationStats::new(1, None));
+
+                // Reset playback
+                playback.paused = true;
+                playback.jump_to_frame = Some(0);
+            }
+
+            SimulationFrameMsg::Frame(frame) => {
+                println!("Got frame, len: {}", frame.len());
+                if let Some(ref mut sim) = sim_ref {
+                    sim.frames.push(frame.clone());
+
+                    if sim.frames.len() >= 2 && loading.0 {
+                        loading.0 = false;
+                        playback.paused = false;
+                        spawn_scene(&mut commands);
+                    }
+
+                    // Count cell types for stats
+                    let mut trees = 0;
+                    let mut burning_trees = 0;
+                    let mut tree_ashes = 0;
+                    let mut grasses = 0;
+                    let mut burning_grasses = 0;
+                    let mut grass_ashes = 0;
+
+                    for row in &frame {
+                        for cell in row {
+                            match cell.as_str() {
+                                "T" => trees += 1,
+                                "*" | "**" | "***" => burning_trees += 1,
+                                "A" => tree_ashes += 1,
+                                "G" => grasses += 1,
+                                "+" => burning_grasses += 1,
+                                "-" => grass_ashes += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    let frame_index = sim.frames.len() - 1;
+
+                    // Ensure stats have enough room
+                    if stats.trees_over_time.len() <= frame_index {
+                        stats.trees_over_time.push(trees);
+                        stats.burning_trees_over_time.push(burning_trees);
+                        stats.tree_ashes_over_time.push(tree_ashes);
+                        stats.grasses_over_time.push(grasses);
+                        stats.burning_grasses_over_time.push(burning_grasses);
+                        stats.grass_ashes_over_time.push(grass_ashes);
+                    } else {
+                        stats.trees_over_time[frame_index] = trees;
+                        stats.burning_trees_over_time[frame_index] = burning_trees;
+                        stats.tree_ashes_over_time[frame_index] = tree_ashes;
+                        stats.grasses_over_time[frame_index] = grasses;
+                        stats.burning_grasses_over_time[frame_index] = burning_grasses;
+                        stats.grass_ashes_over_time[frame_index] = grass_ashes;
+                    }
+
+                    stats.frame_counter = sim.frames.len();
+                }
+            }
+
+            SimulationFrameMsg::SimulationEnded => {
+                // (optional) Handle end-of-simulation logic
+            }
         }
     }
 }
-// ───────────────────────────── Asset setup ─────────────────────────────
+
+// ------------- Asset setup -------------
 fn setup_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -242,7 +467,6 @@ fn setup_assets(
         "burnt_grass",
         meshes.add(Mesh::from(Cylinder::new(5.0, 0.2))),
     );
-    mesh_map.insert("burning_leaves", mesh_map["leaves"].clone());
     mesh_map.insert("burning_leaves1", mesh_map["leaves"].clone());
     mesh_map.insert("burning_leaves2", mesh_map["leaves"].clone());
     mesh_map.insert("burning_leaves3", mesh_map["leaves"].clone());
@@ -324,158 +548,14 @@ fn setup_assets(
             ..default()
         }),
     );
+
     commands.insert_resource(CachedAssets {
         meshes: mesh_map,
         materials: mat_map,
     });
 }
-// ───────────────────────── Simulation start ────────────────────────────
-fn start_simulation_button_system(
-    mut commands: Commands,
-    mut params: ResMut<SimulationParams>,
-    mut loading: ResMut<LoadingScreen>,
-    mut pending: ResMut<PendingSimulation>,
-    old_entities: Query<Entity, With<SimulationEntity>>,
-) {
-    if !params.trigger_simulation || loading.0 {
-        return;
-    }
-    for e in old_entities.iter() {
-        commands.entity(e).despawn_recursive();
-    }
-    loading.0 = true;
-    let result = Arc::new(Mutex::new(None));
-    let cmd = format!(
-        "sh run-sim.sh {} {} {} {} {} {} {} {}",
-        params.width,
-        params.height,
-        params.burning_trees,
-        params.burning_grasses,
-        params.is_wind_toggled as i32,
-        params.wind_angle,
-        params.wind_strength,
-        params.number_of_steps
-    );
-    let result_clone = Arc::clone(&result);
-    let handle = thread::spawn(move || {
-        let mut child = Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("failed to launch Scala sim");
-        if let Some(stdout) = child.stdout.take() {
-            for line in BufReader::new(stdout).lines().flatten() {
-                println!("[Scala]: {}", line);
-            }
-        }
-        let _ = child.wait();
-        if let Some(data) = load_simulation_data() {
-            *result_clone.lock().unwrap() = Some(data);
-        }
-    });
-    pending.handle = Some(handle);
-    pending.result = result;
-    params.trigger_simulation = false;
-}
-// ───────────────────────── Spawn camera & lights ─────────────────────────
-fn spawn_camera(commands: &mut Commands) {
-    commands.spawn((
-        Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 250.0, 400.0).looking_at(Vec3::ZERO, Vec3::Y),
-            ..default()
-        },
-        MainCamera,
-        FlyCamera,
-        SimulationEntity,
-    ));
-    commands.spawn((
-        DirectionalLightBundle {
-            transform: Transform::from_xyz(0.0, 200.0, 100.0).looking_at(Vec3::ZERO, Vec3::Y),
-            directional_light: DirectionalLight {
-                shadows_enabled: false,
-                illuminance: 10000.0,
-                ..default()
-            },
-            ..default()
-        },
-        SimulationEntity,
-    ));
-    commands.spawn((
-        PointLightBundle {
-            transform: Transform::from_xyz(100.0, 150.0, 100.0),
-            point_light: PointLight {
-                intensity: 5000.0,
-                range: 500.0,
-                shadows_enabled: false,
-                ..default()
-            },
-            ..default()
-        },
-        SimulationEntity,
-    ));
-    commands.insert_resource(AmbientLight {
-        color: Color::WHITE,
-        brightness: 0.2,
-    });
-}
-// ───────────────────────── Check sim ready ─────────────────────────────
-fn check_simulation_ready_system(
-    mut commands: Commands,
-    mut loading: ResMut<LoadingScreen>,
-    mut pending: ResMut<PendingSimulation>,
-    mut playback: ResMut<PlaybackControl>,
-) {
-    if !loading.0 {
-        return;
-    }
-    // Scope the immutable borrow of pending.result so it ends before we do `*pending = …`
-    let data_opt = {
-        let guard = pending.result.lock().unwrap();
-        guard.clone()
-    };
-    if let Some(data) = data_opt {
-        let total_frames = data.steps.len();
-        let first_frame_data = &data.steps[0];
 
-        // Calculate initial stats for frame 0
-        let (mut t, mut bt, mut ta, mut g, mut bg, mut ga) = (0, 0, 0, 0, 0, 0);
-        for row in first_frame_data.iter() {
-            for cell in row.iter() {
-                match cell.as_str() {
-                    "T" => t += 1,
-                    "*" => bt += 1,
-                    "G" => g += 1,
-                    "A" => ta += 1,
-                    "+" => bg += 1,
-                    "-" => ga += 1,
-                    _ => {}
-                }
-            }
-        }
-
-        commands.insert_resource(SimulationStats::new(
-            total_frames,
-            Some((t, bt, ta, g, bg, ga)),
-        ));
-
-        let frames = data.steps;
-        // start at index 0
-        let start_frame = 0;
-        commands.insert_resource(Simulation {
-            frames,
-            current: start_frame,
-            width: data.width,
-            height: data.height,
-        });
-        spawn_camera(&mut commands);
-        playback.paused = false;
-        playback.jump_to_frame = Some(0);
-        loading.0 = false;
-        *pending = PendingSimulation::default();
-    }
-}
-// ─────────────────────── Frame advance system ────────────────────────
+// ------------- Frame advance system -------------
 fn advance_frame_system(
     mut commands: Commands,
     time: Res<Time>,
@@ -490,13 +570,14 @@ fn advance_frame_system(
         Some(s) => s,
         None => return,
     };
-    // 1) update timer to match speed slider
+    if sim.frames.is_empty() {
+        return;
+    }
     if timer.0.duration().as_secs_f32() != playback.speed {
         timer
             .0
-            .set_duration(std::time::Duration::from_secs_f32(playback.speed));
+            .set_duration(Duration::from_secs_f32(playback.speed));
     }
-    // 2) bail if paused + no explicit step/jump
     if playback.paused
         && !playback.step_forward
         && !playback.step_back
@@ -504,16 +585,12 @@ fn advance_frame_system(
     {
         return;
     }
-    // 3) require either a timer tick or an explicit step/jump
     let ticked = timer.0.tick(time.delta()).just_finished();
     if !ticked && playback.jump_to_frame.is_none() && !playback.step_forward && !playback.step_back
     {
         return;
     }
-    // save old index for stats
-    let prev = sim.current;
-    let last = sim.frames.len() - 1;
-    // 4) decide the next index
+    let last = sim.frames.len().saturating_sub(1);
     let mut next = sim.current;
     if let Some(jump) = playback.jump_to_frame.take() {
         next = jump.min(last);
@@ -529,17 +606,14 @@ fn advance_frame_system(
         if next < last {
             next += 1;
         } else {
-            // wrap-around at end
             next = 0;
             playback.paused = true;
         }
     }
     sim.current = next;
-    // 5) despawn old frame
     for ent in cells.iter() {
         commands.entity(ent).despawn_recursive();
     }
-    // 6) render the new current frame
     let grid = &sim.frames[sim.current];
     let cell_size = 10.0;
     let spacing = 1.5;
@@ -547,23 +621,18 @@ fn advance_frame_system(
     let offset_z = -(sim.height as f32 * cell_size * spacing) / 2.0;
     let height = grid.len();
     let width = grid[0].len();
-    let (mut t, mut bt, mut ta, mut g, mut bg, mut ga) = (0, 0, 0, 0, 0, 0);
     for (iy, row) in grid.iter().enumerate() {
         let y = height - 1 - iy;
         for (ix, cell) in row.iter().enumerate() {
-            let x = width - 1 - ix; // Flip horizontally
+            let x = width - 1 - ix;
             let pos = Vec3::new(
-                offset_x + x as f32 * cell_size * spacing,
+                offset_x + y as f32 * cell_size * spacing, // <--- y and x swapped!
                 0.0,
-                offset_z + y as f32 * cell_size * spacing,
+                offset_z - x as f32 * cell_size * spacing, // <--- and x is now negative in Z
             );
+
             match cell.as_str() {
                 "T" | "*" | "**" | "***" => {
-                    if cell == "*" || cell == "**" || cell == "***" {
-                        bt += 1
-                    } else {
-                        t += 1
-                    }
                     spawn_cell(&mut commands, &cache, "trunk", pos + Vec3::Y * 2.0);
                     spawn_cell(
                         &mut commands,
@@ -578,13 +647,6 @@ fn advance_frame_system(
                     );
                 }
                 other => {
-                    match other {
-                        "G" => g += 1,
-                        "A" => ta += 1,
-                        "+" => bg += 1,
-                        "-" => ga += 1,
-                        _ => {}
-                    }
                     spawn_cell(
                         &mut commands,
                         &cache,
@@ -595,32 +657,9 @@ fn advance_frame_system(
             }
         }
     }
-    // 7) update stats only on forward motion within bounds, or if jumping to a frame
-    //    We also need to update stats if the current frame is 0 and it was just loaded
-    //    (handled by the initial stats in `check_simulation_ready_system`).
-    //    For subsequent frames, update only when moving forward or explicitly jumping.
-    if sim.current > prev || (sim.current == 0 && prev == 0 && sim.frames.len() > 1) {
-        update_stats(&mut stats, sim.current, t, bt, ta, g, bg, ga);
-    }
 }
-fn update_stats(
-    stats: &mut SimulationStats,
-    idx: usize,
-    trees: i64,
-    burning_trees: i64,
-    tree_ashes: i64,
-    grasses: i64,
-    burning_grasses: i64,
-    grass_ashes: i64,
-) {
-    // Only update the specific index
-    stats.trees_over_time[idx] = trees;
-    stats.burning_trees_over_time[idx] = burning_trees;
-    stats.tree_ashes_over_time[idx] = tree_ashes;
-    stats.grasses_over_time[idx] = grasses;
-    stats.burning_grasses_over_time[idx] = burning_grasses;
-    stats.grass_ashes_over_time[idx] = grass_ashes;
-}
+
+// ------------- Kind from string -------------
 fn kind_from_str(cell: &str) -> &'static str {
     match cell {
         "G" => "grass",
@@ -649,21 +688,85 @@ fn spawn_cell(commands: &mut Commands, cache: &CachedAssets, kind: &str, pos: Ve
         SimulationEntity,
     ));
 }
-// ─────────────────────────── UI system ────────────────────────────────
+
+// ------------- Camera movement -------------
+fn camera_movement_system(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    buttons: Res<ButtonInput<MouseButton>>,
+    mut mouse_motion_events: EventReader<MouseMotion>,
+    mut scroll: EventReader<MouseWheel>,
+    mut query: Query<&mut Transform, With<FlyCamera>>,
+) {
+    let mut transform = match query.get_single_mut() {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+    let mut direction = Vec3::ZERO;
+    let forward: Vec3 = transform.forward().into();
+    let right: Vec3 = transform.right().into();
+    let up = Vec3::Y;
+    let speed = 200.0 * time.delta_seconds();
+    if keys.pressed(KeyCode::KeyW) {
+        direction += forward;
+    }
+    if keys.pressed(KeyCode::KeyS) {
+        direction -= forward;
+    }
+    if keys.pressed(KeyCode::KeyA) {
+        direction -= right;
+    }
+    if keys.pressed(KeyCode::KeyD) {
+        direction += right;
+    }
+    if keys.pressed(KeyCode::KeyE) {
+        direction += up;
+    }
+    if keys.pressed(KeyCode::KeyQ) {
+        direction -= up;
+    }
+    transform.translation += direction * speed;
+    for ev in scroll.read() {
+        transform.translation += forward * ev.y * 20.0;
+    }
+    if buttons.pressed(MouseButton::Left) {
+        let mut delta = Vec2::ZERO;
+        for ev in mouse_motion_events.read() {
+            delta += ev.delta;
+        }
+        if delta.length_squared() > 0.0 {
+            let yaw = Quat::from_rotation_y(-delta.x * 0.002);
+            let pitch = Quat::from_rotation_x(-delta.y * 0.002);
+            transform.rotation = yaw * transform.rotation;
+            transform.rotation = transform.rotation * pitch;
+        }
+    }
+}
+
+// ------------- Pause/Resume -------------
+fn space_pause_resume_system(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut playback: ResMut<PlaybackControl>,
+) {
+    if keys.just_pressed(KeyCode::Space) {
+        playback.paused = !playback.paused;
+    }
+}
+
 fn ui_system(
     mut contexts: EguiContexts,
     mut params: ResMut<SimulationParams>,
     sim: Option<Res<Simulation>>,
-    loading: Res<LoadingScreen>,
-    mut text_timer: ResMut<LoadingTextTimer>,
-    time: Res<Time>,
     mut playback: ResMut<PlaybackControl>,
     stats: Res<SimulationStats>,
     mut show_graphs_resource: ResMut<ShowGraphs>,
+    loading: Res<LoadingScreen>,
+    mut text_timer: ResMut<LoadingTextTimer>,
+    time: Res<Time>,
 ) {
-    let sim_ref = sim.as_ref().map(|r| &**r);
     let ctx = contexts.ctx_mut();
-    // ─────── Loading overlay ─────────────────────────────────────
+    let sim_ref = sim.as_ref().map(|r| &**r);
+
     if loading.0 {
         text_timer.timer.tick(time.delta());
         if text_timer.timer.just_finished() {
@@ -678,14 +781,13 @@ fn ui_system(
         });
         return;
     }
-    // ─────── Side panel with controls ────────────────────────────
+
     egui::SidePanel::left("side_panel")
         .resizable(true)
         .min_width(200.0)
         .show(ctx, |ui| {
             ui.heading("Simulation Controls");
             ui.separator();
-            // Parameter sliders
             ui.add(egui::Slider::new(&mut params.width, 10..=100).text("Width"));
             ui.add(egui::Slider::new(&mut params.height, 10..=100).text("Height"));
             ui.add(egui::Slider::new(&mut params.burning_trees, 0..=100).text("Burning trees %"));
@@ -697,16 +799,27 @@ fn ui_system(
                 &mut params.is_wind_toggled,
                 "Enable wind",
             ));
+
             if params.is_wind_toggled {
                 ui.add(egui::Slider::new(&mut params.wind_angle, 0..=359).text("Wind angle °"));
                 ui.add(
                     egui::Slider::new(&mut params.wind_strength, 1..=100)
                         .text("Wind strength km/h"),
                 );
+                if ui.button("Update Wind").clicked() {
+                    update_sim_control(SimControl {
+                        windAngle: Some(params.wind_angle as i32),
+                        windStrength: Some(params.wind_strength as i32),
+                        windEnabled: Some(params.is_wind_toggled),
+                        ..Default::default()
+                    });
+                }
             }
+
             if ui.button("Start Simulation").clicked() {
                 params.trigger_simulation = true;
             }
+
             if let Some(sim) = sim_ref {
                 ui.separator();
                 ui.label("Playback Controls");
@@ -723,16 +836,22 @@ fn ui_system(
                         .clicked()
                     {
                         playback.paused = !playback.paused;
+                        update_sim_control(SimControl {
+                            paused: Some(playback.paused),
+                            ..Default::default()
+                        });
                     }
                     if ui.small_button("⏭").clicked() {
                         playback.step_forward = true;
                     }
                     if ui.small_button("⏭|").clicked() {
-                        playback.jump_to_frame = Some(sim.frames.len() - 1);
+                        playback.jump_to_frame = Some(sim.frames.len().saturating_sub(1));
                     }
                 });
+
                 ui.add(egui::Slider::new(&mut playback.speed, 0.05..=2.0).text("Speed s/frame"));
                 ui.label(format!("Frame: {}/{}", sim.current + 1, sim.frames.len()));
+
                 let mut display_frame = sim.current + 1;
                 if ui
                     .add(egui::Slider::new(&mut display_frame, 1..=sim.frames.len()).text("Frame"))
@@ -740,33 +859,37 @@ fn ui_system(
                 {
                     playback.jump_to_frame = Some(display_frame - 1);
                 }
-                ui.separator();
 
-                // --- NEW: Toggle for Graphs Floating Window ---
-                let show_graphs = &mut show_graphs_resource.0;
+                if playback.paused && ui.button("Step One Frame").clicked() {
+                    update_sim_control(SimControl {
+                        step: Some(true),
+                        ..Default::default()
+                    });
+                }
+
+                ui.separator();
                 if ui
-                    .button(if *show_graphs {
+                    .button(if show_graphs_resource.0 {
                         "Hide Graphs"
                     } else {
                         "Show Graphs"
                     })
                     .clicked()
                 {
-                    *show_graphs = !*show_graphs;
+                    show_graphs_resource.0 = !show_graphs_resource.0;
                 }
             }
         });
 
-    // ─────── Floating Graphs Window ─────────────────────────────
+    // ─────────── Graphs ────────────────────
     if let Some(sim) = sim_ref {
-        let initial_total = stats.trees_over_time[0]
-            + stats.burning_trees_over_time[0]
-            + stats.tree_ashes_over_time[0]
-            + stats.grasses_over_time[0]
-            + stats.burning_grasses_over_time[0]
-            + stats.grass_ashes_over_time[0];
+        let available = stats.trees_over_time.len();
+        if available == 0 {
+            return;
+        }
+        let last_index = sim.current.min(available - 1);
 
-        let total_trees_over_time: Vec<f64> = (0..=sim.current)
+        let total_trees_over_time: Vec<f64> = (0..=last_index)
             .map(|i| {
                 (stats.trees_over_time[i]
                     + stats.burning_trees_over_time[i]
@@ -774,7 +897,7 @@ fn ui_system(
             })
             .collect();
 
-        let total_grass_over_time: Vec<f64> = (0..=sim.current)
+        let total_grass_over_time: Vec<f64> = (0..=last_index)
             .map(|i| {
                 (stats.grasses_over_time[i]
                     + stats.burning_grasses_over_time[i]
@@ -782,257 +905,180 @@ fn ui_system(
             })
             .collect();
 
-        // Show floating window if toggled
+        let initial_total = total_trees_over_time[0] + total_grass_over_time[0];
+
         if show_graphs_resource.0 {
             egui::Window::new("Simulation Graphs")
-                .open(&mut show_graphs_resource.0)
                 .default_width(550.0)
                 .default_height(700.0)
                 .show(ctx, |ui| {
-                    // --- Trees as Percent ---
+                    use egui_plot::{Legend, Line, Plot, PlotPoints};
+
+                    macro_rules! plot_percent {
+                        ($name:expr, $v:expr, $total:expr) => {{
+                            let points: PlotPoints = (0..=last_index)
+                                .map(|i| {
+                                    let total = $total[i];
+                                    let val = if total > 0.0 {
+                                        ($v[i] as f64 / total) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    [i as f64, val]
+                                })
+                                .collect();
+                            Line::new(points).name($name)
+                        }};
+                    }
+
                     ui.label("Tree Status (%)");
-                    Plot::new("Trees Percentage")
+                    Plot::new("Trees")
                         .legend(Legend::default())
                         .height(120.0)
                         .show(ui, |plot_ui| {
-                            let trees: PlotPoints = (0..=sim.current)
-                                .map(|i| {
-                                    let total = total_trees_over_time[i];
-                                    let value = if total > 0.0 {
-                                        (stats.trees_over_time[i] as f64 / total) * 100.0
-                                    } else {
-                                        0.0
-                                    };
-                                    [i as f64, value]
-                                })
-                                .collect();
-                            let burning: PlotPoints = (0..=sim.current)
-                                .map(|i| {
-                                    let total = total_trees_over_time[i];
-                                    let value = if total > 0.0 {
-                                        (stats.burning_trees_over_time[i] as f64 / total) * 100.0
-                                    } else {
-                                        0.0
-                                    };
-                                    [i as f64, value]
-                                })
-                                .collect();
-                            let ashes: PlotPoints = (0..=sim.current)
-                                .map(|i| {
-                                    let total = total_trees_over_time[i];
-                                    let value = if total > 0.0 {
-                                        (stats.tree_ashes_over_time[i] as f64 / total) * 100.0
-                                    } else {
-                                        0.0
-                                    };
-                                    [i as f64, value]
-                                })
-                                .collect();
-
-                            plot_ui.line(Line::new(trees).name("Trees %"));
-                            plot_ui.line(Line::new(burning).name("Burning %"));
-                            plot_ui.line(Line::new(ashes).name("Ashes %"));
+                            plot_ui.line(plot_percent!(
+                                "Trees %",
+                                stats.trees_over_time,
+                                total_trees_over_time
+                            ));
+                            plot_ui.line(plot_percent!(
+                                "Burning %",
+                                stats.burning_trees_over_time,
+                                total_trees_over_time
+                            ));
+                            plot_ui.line(plot_percent!(
+                                "Ashes %",
+                                stats.tree_ashes_over_time,
+                                total_trees_over_time
+                            ));
                         });
 
-                    // --- Grass as Percent ---
                     ui.label("Grass Status (%)");
-                    Plot::new("Grass Percentage")
+                    Plot::new("Grasses")
                         .legend(Legend::default())
                         .height(120.0)
                         .show(ui, |plot_ui| {
-                            let grasses: PlotPoints = (0..=sim.current)
-                                .map(|i| {
-                                    let total = total_grass_over_time[i];
-                                    let value = if total > 0.0 {
-                                        (stats.grasses_over_time[i] as f64 / total) * 100.0
-                                    } else {
-                                        0.0
-                                    };
-                                    [i as f64, value]
-                                })
-                                .collect();
-                            let burning: PlotPoints = (0..=sim.current)
-                                .map(|i| {
-                                    let total = total_grass_over_time[i];
-                                    let value = if total > 0.0 {
-                                        (stats.burning_grasses_over_time[i] as f64 / total) * 100.0
-                                    } else {
-                                        0.0
-                                    };
-                                    [i as f64, value]
-                                })
-                                .collect();
-                            let ashes: PlotPoints = (0..=sim.current)
-                                .map(|i| {
-                                    let total = total_grass_over_time[i];
-                                    let value = if total > 0.0 {
-                                        (stats.grass_ashes_over_time[i] as f64 / total) * 100.0
-                                    } else {
-                                        0.0
-                                    };
-                                    [i as f64, value]
-                                })
-                                .collect();
-
-                            plot_ui.line(Line::new(grasses).name("Grass %"));
-                            plot_ui.line(Line::new(burning).name("Burning %"));
-                            plot_ui.line(Line::new(ashes).name("Ashes %"));
+                            plot_ui.line(plot_percent!(
+                                "Grass %",
+                                stats.grasses_over_time,
+                                total_grass_over_time
+                            ));
+                            plot_ui.line(plot_percent!(
+                                "Burning %",
+                                stats.burning_grasses_over_time,
+                                total_grass_over_time
+                            ));
+                            plot_ui.line(plot_percent!(
+                                "Ashes %",
+                                stats.grass_ashes_over_time,
+                                total_grass_over_time
+                            ));
                         });
 
-                    // --- Burning Cells (%) ---
                     ui.label("Burning Cells (%)");
-                    Plot::new("BurningCellsPercent")
+                    Plot::new("Burning")
                         .legend(Legend::default())
                         .height(120.0)
                         .show(ui, |plot_ui| {
-                            let burning_percent: PlotPoints = (0..=sim.current)
+                            let points: PlotPoints = (0..=last_index)
                                 .map(|i| {
-                                    let burning = stats.burning_trees_over_time[i]
-                                        + stats.burning_grasses_over_time[i];
-                                    let pct = if initial_total > 0 {
-                                        (burning as f64 / initial_total as f64) * 100.0
+                                    let val = stats.burning_grasses_over_time[i]
+                                        + stats.burning_trees_over_time[i];
+                                    let pct = if initial_total > 0.0 {
+                                        (val as f64 / initial_total) * 100.0
                                     } else {
                                         0.0
                                     };
                                     [i as f64, pct]
                                 })
                                 .collect();
-                            plot_ui.line(Line::new(burning_percent).name("Burning %"));
+                            plot_ui.line(Line::new(points).name("Burning %"));
                         });
 
-                    ui.label("New Burning Cells Per Step");
-                    Plot::new("NewBurnings")
+                    ui.label("New Burning Per Step");
+                    Plot::new("NewBurning")
                         .legend(Legend::default())
                         .height(120.0)
                         .show(ui, |plot_ui| {
                             let mut prev = 0;
-                            let new_burning: PlotPoints = (0..=sim.current)
+                            let points: PlotPoints = (0..=last_index)
                                 .map(|i| {
-                                    let curr = stats.burning_trees_over_time[i]
-                                        + stats.burning_grasses_over_time[i];
-                                    let nb = if i == 0 {
-                                        curr
+                                    let now = stats.burning_grasses_over_time[i]
+                                        + stats.burning_trees_over_time[i];
+                                    let diff = if i == 0 {
+                                        now
                                     } else {
-                                        curr.saturating_sub(prev)
+                                        now.saturating_sub(prev)
                                     };
-                                    prev = curr;
-                                    [i as f64, nb as f64]
+                                    prev = now;
+                                    [i as f64, diff as f64]
                                 })
                                 .collect();
-                            plot_ui.line(Line::new(new_burning).name("New Burning"));
+                            plot_ui.line(Line::new(points).name("New Burning"));
                         });
 
-                    ui.label("Percentage of Area Burned");
-                    Plot::new("PercentBurned")
+                    ui.label("Burned Area (%)");
+                    Plot::new("BurnedArea")
                         .legend(Legend::default())
                         .height(120.0)
                         .show(ui, |plot_ui| {
-                            let percent_burned: PlotPoints = (0..=sim.current)
+                            let points: PlotPoints = (0..=last_index)
                                 .map(|i| {
                                     let burned = stats.tree_ashes_over_time[i]
                                         + stats.grass_ashes_over_time[i];
-                                    let pct = if initial_total > 0 {
-                                        (burned as f64 / initial_total as f64) * 100.0
+                                    let pct = if initial_total > 0.0 {
+                                        (burned as f64 / initial_total) * 100.0
                                     } else {
                                         0.0
                                     };
                                     [i as f64, pct]
                                 })
                                 .collect();
-                            plot_ui.line(Line::new(percent_burned).name("% Burned"));
+                            plot_ui.line(Line::new(points).name("% Burned"));
                         });
                 });
         }
     }
-
-    // ───────────────── Wind Indicator (unchanged) ──────────────────
-    if params.is_wind_toggled {
-        egui::Area::new("wind_indicator")
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 20.0))
-            .show(ctx, |ui| {
-                let desired_size = egui::vec2(120.0, 140.0);
-                let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
-                let painter = ui.painter();
-                let center = rect.center() - egui::vec2(0.0, 10.0);
-
-                let compass_radius = 50.0;
-                painter.circle_stroke(
-                    center,
-                    compass_radius,
-                    egui::Stroke::new(1.0, egui::Color32::GRAY),
-                );
-                painter.text(
-                    center + egui::vec2(0.0, -(compass_radius + 5.0)),
-                    egui::Align2::CENTER_CENTER,
-                    "N",
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::LIGHT_GRAY,
-                );
-                painter.text(
-                    center + egui::vec2(0.0, compass_radius + 5.0),
-                    egui::Align2::CENTER_CENTER,
-                    "S",
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::LIGHT_GRAY,
-                );
-                painter.text(
-                    center + egui::vec2(compass_radius + 5.0, 0.0),
-                    egui::Align2::CENTER_CENTER,
-                    "E",
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::LIGHT_GRAY,
-                );
-                painter.text(
-                    center + egui::vec2(-(compass_radius + 5.0), 0.0),
-                    egui::Align2::CENTER_CENTER,
-                    "W",
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::LIGHT_GRAY,
-                );
-
-                let wind_goes_to_angle_rad = (params.wind_angle as f32).to_radians();
-                let dir_x = wind_goes_to_angle_rad.sin();
-                let dir_y = -wind_goes_to_angle_rad.cos();
-
-                let dir = egui::vec2(dir_x, dir_y);
-
-                let max_len = compass_radius - 5.0;
-                let min_len = 10.0;
-                let strength_ratio = (params.wind_strength.saturating_sub(1)) as f32 / 99.0;
-                let length = min_len + strength_ratio * (max_len - min_len);
-
-                let arrow_base = center - dir * length / 2.0;
-                let arrow_vec = dir * length;
-
-                painter.arrow(
-                    arrow_base,
-                    arrow_vec,
-                    egui::Stroke::new(3.0, egui::Color32::from_rgb(255, 100, 100)),
-                );
-
-                let strength_text = format!("{} km/h", params.wind_strength);
-                painter.text(
-                    rect.center() + egui::vec2(0.0, compass_radius + 5.0),
-                    egui::Align2::CENTER_CENTER,
-                    strength_text,
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::LIGHT_GRAY,
-                );
-            });
-    }
 }
 
-fn space_pause_resume_system(
-    keys: Res<ButtonInput<KeyCode>>,
-    mut playback: ResMut<PlaybackControl>,
-) {
-    // Only act on the frame the spacebar is pressed (not held)
-    if keys.just_pressed(KeyCode::Space) {
-        playback.paused = !playback.paused;
-    }
-}
-
-fn load_simulation_data() -> Option<GridData> {
-    let file = File::open("assets/simulation.json").ok()?;
-    serde_json::from_reader(BufReader::new(file)).ok()
+// At the bottom or top of your file
+fn spawn_scene(commands: &mut Commands) {
+    commands.spawn((
+        Camera3dBundle {
+            transform: Transform::from_xyz(0.0, 250.0, 400.0).looking_at(Vec3::ZERO, Vec3::Y),
+            ..default()
+        },
+        MainCamera,
+        FlyCamera,
+        SimulationEntity,
+    ));
+    commands.spawn((
+        DirectionalLightBundle {
+            transform: Transform::from_xyz(0.0, 200.0, 100.0).looking_at(Vec3::ZERO, Vec3::Y),
+            directional_light: DirectionalLight {
+                shadows_enabled: false,
+                illuminance: 10_000.0,
+                ..default()
+            },
+            ..default()
+        },
+        SimulationEntity,
+    ));
+    commands.spawn((
+        PointLightBundle {
+            transform: Transform::from_xyz(100.0, 150.0, 100.0),
+            point_light: PointLight {
+                intensity: 5_000.0,
+                range: 500.0,
+                shadows_enabled: false,
+                ..default()
+            },
+            ..default()
+        },
+        SimulationEntity,
+    ));
+    commands.insert_resource(AmbientLight {
+        color: Color::WHITE,
+        brightness: 0.2,
+    });
 }
