@@ -929,7 +929,7 @@ fn ui_system(
                 if ui.button("Start Simulation").clicked() {
                     params.trigger_simulation = true;
                 }
-                if ui.button("Update Wind").clicked() {
+                if sim_ref.is_some() && ui.button("Update Wind").clicked() {
                     update_sim_control(SimControl {
                         windAngle: Some(params.wind_angle as i32),
                         windStrength: Some(params.wind_strength as i32),
