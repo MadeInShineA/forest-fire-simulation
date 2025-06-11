@@ -41,8 +41,17 @@ object Main extends App {
     s"Using parameters: width=$width, height=$height, onFireTreesPercent=$onFireTreesPercent, onFireGrassPercent=$onFireGrassPercent, isWindEnable=$enableWind, windAngle=$windAngleArg, windStrength=$windStrengthArg"
   )
 
-  var grid = new Grid(width, height)
-    .igniteRandomFires(onFireTreesPercent, onFireGrassPercent)
+  val initialControl = Try(
+  Json.parse(Source.fromFile("assets/sim_control.json").mkString)
+).getOrElse(Json.obj())
+
+val initWindAngle = (initialControl \ "windAngle").asOpt[Int].getOrElse(windAngleArg)
+val initWindStrength = (initialControl \ "windStrength").asOpt[Int].getOrElse(windStrengthArg)
+val initIsWindEnabled = (initialControl \ "windEnabled").asOpt[Boolean].getOrElse(enableWind == 1)
+
+var grid = new Grid(width, height)
+  .igniteRandomFires(onFireTreesPercent, onFireGrassPercent)
+  .nextStep(initIsWindEnabled, initWindAngle, initWindStrength) // Apply wind to the first step
 
   Using.resource(new PrintWriter("assets/simulation_stream.ndjson")) { out =>
     val metadata = Json.obj("width" -> width, "height" -> height)

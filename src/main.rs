@@ -287,37 +287,27 @@ fn start_simulation_button_system(
     }
     params.trigger_simulation = false;
 
-    // 1) despawn previous run
+    // 1) Despawn previous simulation entities
     for e in old_entities.iter() {
         commands.entity(e).despawn_recursive();
     }
 
-    // 2) show loading + lock UI
+    // 2) Show loading screen and pause playback
     loading.0 = true;
-    playback.paused = true;
+    playback.paused = false;
     playback.jump_to_frame = Some(0);
 
-    // 3) kill old NDJSON tailer
+    // 3) Kill old NDJSON tailer thread
     if let Some(handle) = ndjson_handle.0.take() {
         *kill_switch.0.lock().unwrap() = true;
         let _ = handle.join();
         *kill_switch.0.lock().unwrap() = false;
     }
 
-    // 4) remove old stream file
+    // 4) Remove old NDJSON simulation stream
     let _ = std::fs::remove_file("assets/simulation_stream.ndjson");
 
-    // 6) hook up new tailer
-    let (_tx, rx) = unbounded::<SimulationFrameMsg>();
-    commands.insert_resource(NdjsonChannel(rx));
-    let handle = spawn_ndjson_tailer(
-        _tx,
-        "assets/simulation_stream.ndjson".to_string(),
-        kill_switch.0.clone(),
-    );
-    ndjson_handle.0 = Some(handle);
-
-    // 5) launch backend
+    // 5) Start the backend simulation subprocess
     let cmdline = vec![
         params.width.to_string(),
         params.height.to_string(),
@@ -337,14 +327,27 @@ fn start_simulation_button_system(
             .spawn();
     });
 
-    // 7) clear old Simulation & stats
+    // 6) Hook up a new NDJSON tailer to read simulation frames
+    let (_tx, rx) = unbounded::<SimulationFrameMsg>();
+    commands.insert_resource(NdjsonChannel(rx));
+    let handle = spawn_ndjson_tailer(
+        _tx,
+        "assets/simulation_stream.ndjson".to_string(),
+        kill_switch.0.clone(),
+    );
+    ndjson_handle.0 = Some(handle);
+
+    // 7) Clear old simulation state & insert new stats resource
     commands.remove_resource::<Simulation>();
     commands.insert_resource(SimulationStats::new(1, None));
 
-    // 8) unpause backend so it starts emitting frames
+    // 8) Write sim_control.json with all values (FIX for your bug)
     update_sim_control(SimControl {
         paused: Some(false),
-        ..Default::default()
+        windEnabled: Some(params.is_wind_toggled), // ✅
+        windAngle: Some(params.wind_angle as i32), // ✅
+        windStrength: Some(params.wind_strength as i32), // ✅
+        step: Some(false),
     });
 }
 
@@ -664,13 +667,11 @@ fn advance_frame_system(
     let height = grid.len();
     let width = grid[0].len();
     for (iy, row) in grid.iter().enumerate() {
-        let y = height - 1 - iy;
         for (ix, cell) in row.iter().enumerate() {
-            let x = width - 1 - ix;
             let pos = Vec3::new(
-                offset_x + y as f32 * cell_size * spacing, // <--- y and x swapped!
+                offset_x + (width - 1 - ix) as f32 * cell_size * spacing, // flip X
                 0.0,
-                offset_z - x as f32 * cell_size * spacing, // <--- and x is now negative in Z
+                offset_z + (height - 1 - iy) as f32 * cell_size * spacing, // flip Z
             );
 
             match cell.as_str() {
@@ -853,6 +854,7 @@ fn ui_system(
                         windAngle: Some(params.wind_angle as i32),
                         windStrength: Some(params.wind_strength as i32),
                         windEnabled: Some(params.is_wind_toggled),
+                        step: Some(true),
                         ..Default::default()
                     });
                 }
