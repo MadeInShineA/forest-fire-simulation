@@ -1,6 +1,6 @@
 package sim
 
-import scala.util.{Random, Using}
+import scala.util.Random
 import play.api.libs.json._
 
 // === Cell Types ===
@@ -58,42 +58,27 @@ case class Grid(
     burnedGrassToGrassProb: Double = 0.85
 ) {
 
-  def this(width: Int, height: Int) = {
-    this(
-      width,
-      height,
-      Vector.tabulate(height, width)((_, _) => Grid.randomCell())
-    )
-  }
-
   def igniteRandomFires(percentTrees: Double, percentGrass: Double): Grid = {
-    require(
-      percentTrees >= 0 && percentTrees <= 100,
-      "percentTrees must be between 0 and 100"
-    )
-    require(
-      percentGrass >= 0 && percentGrass <= 100,
-      "percentGrass must be between 0 and 100"
-    )
-
+    val rand = new Random()
     val treePositions = for {
       y <- 0 until height
       x <- 0 until width
       if cells(y)(x).cellType == Tree
     } yield (x, y)
-
     val grassPositions = for {
       y <- 0 until height
       x <- 0 until width
       if cells(y)(x).cellType == Grass
     } yield (x, y)
 
+    def pickN[T](xs: Seq[T], n: Int): Set[T] = rand.shuffle(xs).take(n).toSet
+
     val countTrees = ((treePositions.length * percentTrees) / 100.0).round.toInt
     val countGrass =
       ((grassPositions.length * percentGrass) / 100.0).round.toInt
 
-    val selectedTrees = Random.shuffle(treePositions).take(countTrees)
-    val selectedGrass = Random.shuffle(grassPositions).take(countGrass)
+    val selectedTrees = pickN(treePositions, countTrees)
+    val selectedGrass = pickN(grassPositions, countGrass)
 
     val newCells = cells.zipWithIndex.map { case (row, y) =>
       row.zipWithIndex.map { case (cell, xCoord) =>
@@ -106,36 +91,34 @@ case class Grid(
       }
     }
 
-    copy(
-      cells = newCells,
-      ashRegrowSteps = ashRegrowSteps,
-      burnedGrassRegrowSteps = burnedGrassRegrowSteps,
-      treeIgniteProb = treeIgniteProb,
-      grassIgniteProb = grassIgniteProb,
-      fireJumpBaseChance = fireJumpBaseChance,
-      windStrengthFactor = windStrengthFactor,
-      windMinBoost = windMinBoost,
-      windStrongMin = windStrongMin,
-      fireJumpDistFactor = fireJumpDistFactor,
-      ashToTreeProb = ashToTreeProb,
-      burnedGrassToGrassProb = burnedGrassToGrassProb
-    )
+    this.copy(cells = newCells)
   }
 
   def getCell(x: Int, y: Int): Option[Cell] =
     if (x >= 0 && x < width && y >= 0 && y < height) Some(cells(y)(x)) else None
 
+  def isBurning(cellType: CellType): Boolean =
+    cellType match {
+      case BurningTree1 | BurningTree2 | BurningTree3 | BurningGrass => true
+      case _                                                         => false
+    }
+
+  def isLivingOrWater(cellType: CellType): Boolean =
+    cellType match {
+      case Water | Grass | Tree => true
+      case _                    => false
+    }
+
+  def isTreeOrGrass(cellType: CellType): Boolean =
+    cellType match {
+      case Tree | Grass => true
+      case _            => false
+    }
+
   def isBurningNeighbor(x: Int, y: Int): Boolean = {
-    val burningTrees: Set[CellType] =
-      Set(BurningTree1, BurningTree2, BurningTree3)
     val directions = List((-1, 0), (1, 0), (0, -1), (0, 1))
     directions.exists { case (dx, dy) =>
-      getCell(x + dx, y + dy) match {
-        case Some(Cell(cellType))
-            if burningTrees.contains(cellType) || cellType == BurningGrass =>
-          true
-        case _ => false
-      }
+      getCell(x + dx, y + dy).exists(cell => isBurning(cell.cellType))
     }
   }
 
@@ -152,12 +135,7 @@ case class Grid(
       (1, 1)
     )
     neighborDirs.exists { case (dx, dy) =>
-      getCell(x + dx, y + dy) match {
-        case Some(Cell(Water)) => true
-        case Some(Cell(Grass)) => true
-        case Some(Cell(Tree))  => true
-        case _                 => false
-      }
+      getCell(x + dx, y + dy).exists(c => isLivingOrWater(c.cellType))
     }
   }
 
@@ -180,10 +158,6 @@ case class Grid(
       (1, 1)
     )
 
-    val burningTrees: Set[CellType] =
-      Set(BurningTree1, BurningTree2, BurningTree3)
-
-    // Improved wind boost: smooth, exponential scaling with angle
     def windBoost(dx: Int, dy: Int): Double = {
       if (!enableWind) 1.0
       else {
@@ -204,10 +178,7 @@ case class Grid(
         case Tree =>
           val ignites = neighborDirs.exists { case (dx, dy) =>
             getCell(x + dx, y + dy) match {
-              case Some(Cell(cellType))
-                  if burningTrees.contains(
-                    cellType
-                  ) || cellType == BurningGrass =>
+              case Some(Cell(cellType)) if isBurning(cellType) =>
                 val boost = windBoost(dx, dy)
                 rand.nextDouble() < treeIgniteProb * boost
               case _ => false
@@ -218,10 +189,7 @@ case class Grid(
         case Grass =>
           val ignites = neighborDirs.exists { case (dx, dy) =>
             getCell(x + dx, y + dy) match {
-              case Some(Cell(cellType))
-                  if burningTrees.contains(
-                    cellType
-                  ) || cellType == BurningGrass =>
+              case Some(Cell(cellType)) if isBurning(cellType) =>
                 val boost = windBoost(dx, dy)
                 rand.nextDouble() < grassIgniteProb * boost
               case _ => false
@@ -268,23 +236,18 @@ case class Grid(
       y <- 0 until height
       x <- 0 until width
       cell = cells(y)(x)
-      if burningTrees.contains(cell.cellType) || cell.cellType == BurningGrass
+      if isBurning(cell.cellType)
       if rand.nextDouble() < jumpChance
-    } yield {
-      val dist = rand.nextInt(maxJumpDist) + 1 // [1, maxJumpDist]
-      val angleDeviation =
-        rand.nextGaussian() * (math.Pi / 8) // 22.5 deg stddev
-      val jumpAngle = windRad + angleDeviation
-
-      val dx = math.round(math.sin(jumpAngle) * dist).toInt
-      val dy = math.round(-math.cos(jumpAngle) * dist).toInt
-      val tx = x + dx
-      val ty = y + dy
-      (tx, ty)
-    }).filter { case (tx: Int, ty: Int) =>
-      tx >= 0 && tx < width && ty >= 0 && ty < height &&
-      (cells(ty)(tx).cellType == Tree || cells(ty)(tx).cellType == Grass)
-    }.toSet
+      dist = rand.nextInt(maxJumpDist) + 1 // [1, maxJumpDist]
+      angleDeviation = rand.nextGaussian() * (math.Pi / 8) // 22.5 deg stddev
+      jumpAngle = windRad + angleDeviation
+      dx = math.round(math.sin(jumpAngle) * dist).toInt
+      dy = math.round(-math.cos(jumpAngle) * dist).toInt
+      tx = x + dx
+      ty = y + dy
+      if tx >= 0 && tx < width && ty >= 0 && ty < height
+      if isTreeOrGrass(cells(ty)(tx).cellType)
+    } yield (tx, ty)).toSet
 
     // Apply fire jumps
     val finalCells = newCells.zipWithIndex.map { case (row, y) =>
@@ -299,20 +262,7 @@ case class Grid(
       }
     }
 
-    copy(
-      cells = finalCells,
-      ashRegrowSteps = ashRegrowSteps,
-      burnedGrassRegrowSteps = burnedGrassRegrowSteps,
-      treeIgniteProb = treeIgniteProb,
-      grassIgniteProb = grassIgniteProb,
-      fireJumpBaseChance = fireJumpBaseChance,
-      windStrengthFactor = windStrengthFactor,
-      windMinBoost = windMinBoost,
-      windStrongMin = windStrongMin,
-      fireJumpDistFactor = fireJumpDistFactor,
-      ashToTreeProb = ashToTreeProb,
-      burnedGrassToGrassProb = burnedGrassToGrassProb
-    )
+    this.copy(cells = finalCells)
   }
 
   def printGrid(): Unit = {
@@ -352,11 +302,12 @@ case class Grid(
 
 object Grid {
   private val rand = new Random()
-  def randomCell(): Cell = {
-    rand.nextInt(100) match {
-      case n if n < 20 => Cell(Water)
-      case n if n < 50 => Cell(Grass)
-      case _           => Cell(Tree)
-    }
+  def apply(width: Int, height: Int): Grid = {
+    Grid(width, height, Vector.tabulate(height, width)((_, _) => randomCell()))
+  }
+  def randomCell(): Cell = rand.nextInt(100) match {
+    case n if n < 20 => Cell(Water)
+    case n if n < 50 => Cell(Grass)
+    case _           => Cell(Tree)
   }
 }
