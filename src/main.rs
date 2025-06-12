@@ -180,6 +180,9 @@ fn spawn_ndjson_tailer(
     tx: Sender<SimulationFrameMsg>,
     path: &str,
 ) -> notify::Result<RecommendedWatcher> {
+    use std::fs::File;
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+
     let parent = Path::new(path)
         .parent()
         .expect("assets directory must exist");
@@ -205,7 +208,7 @@ fn spawn_ndjson_tailer(
         let mut position = 0u64;
         let mut line = String::new();
 
-        // Read metadata
+        // --- Read metadata ---
         let meta = loop {
             line.clear();
             if reader.read_line(&mut line).unwrap() > 0 {
@@ -227,26 +230,25 @@ fn spawn_ndjson_tailer(
             height: meta.height,
         });
 
-        // Read first frame
-        let _ = loop {
+        // --- Read ALL existing frames ---
+        loop {
             line.clear();
-            if reader.read_line(&mut line).unwrap() > 0 {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                position += line.len() as u64;
+            let n = reader.read_line(&mut line).unwrap();
+            if n == 0 {
+                break; // EOF
+            }
+            position += n as u64;
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
                 if let Ok(frame) = serde_json::from_str::<Vec<Vec<String>>>(trimmed) {
                     let _ = tx.send(SimulationFrameMsg::Frame(frame));
-                    break;
                 } else {
-                    eprintln!("spawn_ndjson_tailer: second line not frame, retrying");
+                    eprintln!("spawn_ndjson_tailer: bad frame, skipping: {trimmed}");
                 }
             }
-            thread::sleep(Duration::from_millis(10));
-        };
+        }
 
-        // Tail further frames
+        // --- Tail further frames ---
         while let Ok(res_event) = rx_fs.recv() {
             if let Ok(event) = res_event {
                 if matches!(event.kind, EventKind::Modify(_)) {
@@ -260,6 +262,8 @@ fn spawn_ndjson_tailer(
                         if !trimmed.is_empty() {
                             if let Ok(frame) = serde_json::from_str::<Vec<Vec<String>>>(trimmed) {
                                 let _ = tx.send(SimulationFrameMsg::Frame(frame));
+                            } else {
+                                eprintln!("spawn_ndjson_tailer: bad frame, skipping: {trimmed}");
                             }
                         }
                         line.clear();
@@ -535,7 +539,7 @@ fn simulation_update_system(
                     width,
                     height,
                 });
-                playback.paused = true;
+                playback.paused = true; // Always start paused
                 playback.jump_to_frame = Some(0);
                 *has_started = true;
             }
@@ -591,9 +595,11 @@ fn simulation_update_system(
                         }
                         stats.frame_counter = sim.frames.len();
                     }
+                    // Only create the scene after at least one frame, but STAY PAUSED!
                     if sim.frames.len() >= 1 && loading.0 {
                         loading.0 = false;
-                        playback.paused = false;
+                        playback.paused = true; // remain paused until user acts
+                        playback.jump_to_frame = Some(0);
                         spawn_scene(&mut commands);
                     }
                 } else if *has_started {
@@ -694,6 +700,11 @@ fn advance_frame_system(
         }
     }
     sim.current = next;
+    eprintln!(
+        "Displaying frame index: {} {:?}",
+        sim.current, sim.frames[sim.current][0]
+    );
+
     for ent in cells.iter() {
         commands.entity(ent).despawn_recursive();
     }
