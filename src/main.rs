@@ -3,6 +3,7 @@ use bevy::input::ButtonInput;
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
+use egui_plot::{Legend, Line, Plot, PlotPoints, PlotResponse};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -883,6 +884,26 @@ fn space_pause_resume_system(
     }
 }
 
+fn handle_plot_click<R>(
+    response: &egui_plot::PlotResponse<R>,
+    playback: &mut PlaybackControl,
+    total_frames: usize,
+) {
+    // Use egui's response for interaction
+    if response.response.clicked() {
+        if let Some(pos) = response.response.interact_pointer_pos() {
+            // Convert screen position to plot coordinates
+            let plot_coords = response.transform.value_from_position(pos);
+            let mut frame = plot_coords.x.round() as isize;
+            if frame < 0 {
+                frame = 0;
+            } else if frame as usize >= total_frames {
+                frame = total_frames as isize - 1;
+            }
+            playback.jump_to_frame = Some(frame as usize);
+        }
+    }
+}
 fn ui_system(
     mut contexts: EguiContexts,
     mut params: ResMut<SimulationParams>,
@@ -930,7 +951,6 @@ fn ui_system(
                 "Enable wind",
             ));
 
-            // Wind sliders only when enabled
             if params.is_wind_toggled {
                 ui.add(egui::Slider::new(&mut params.wind_angle, 0..=359).text("Wind angle °"));
                 ui.add(
@@ -939,7 +959,6 @@ fn ui_system(
                 );
             }
 
-            // Buttons aligned on the same line; Update Wind always visible to allow disabling
             ui.horizontal(|ui| {
                 if ui.button("Start Simulation").clicked() {
                     params.trigger_simulation = true;
@@ -955,7 +974,6 @@ fn ui_system(
                 }
             });
 
-            // Playback controls
             if let Some(sim) = sim_ref {
                 ui.separator();
                 ui.label("Playback Controls");
@@ -1066,8 +1084,9 @@ fn ui_system(
                         }};
                     }
 
+                    // --- Trees Plot ---
                     ui.label("Tree Status (%)");
-                    Plot::new("Trees")
+                    let tree_plot = Plot::new("Trees")
                         .legend(Legend::default())
                         .height(120.0)
                         .show(ui, |plot_ui| {
@@ -1087,9 +1106,11 @@ fn ui_system(
                                 total_trees_over_time
                             ));
                         });
+                    handle_plot_click(&tree_plot, &mut *playback, sim.frames.len());
 
+                    // --- Grasses Plot ---
                     ui.label("Grass Status (%)");
-                    Plot::new("Grasses")
+                    let grass_plot = Plot::new("Grasses")
                         .legend(Legend::default())
                         .height(120.0)
                         .show(ui, |plot_ui| {
@@ -1109,9 +1130,11 @@ fn ui_system(
                                 total_grass_over_time
                             ));
                         });
+                    handle_plot_click(&grass_plot, &mut *playback, sim.frames.len());
 
+                    // --- Burning Cells Plot ---
                     ui.label("Burning Cells (%)");
-                    Plot::new("Burning")
+                    let burning_plot = Plot::new("Burning")
                         .legend(Legend::default())
                         .height(120.0)
                         .show(ui, |plot_ui| {
@@ -1129,9 +1152,11 @@ fn ui_system(
                                 .collect();
                             plot_ui.line(Line::new(points).name("Burning %"));
                         });
+                    handle_plot_click(&burning_plot, &mut *playback, sim.frames.len());
 
+                    // --- New Burning Per Step Plot ---
                     ui.label("New Burning Per Step");
-                    Plot::new("NewBurning")
+                    let new_burning_plot = Plot::new("NewBurning")
                         .legend(Legend::default())
                         .height(120.0)
                         .show(ui, |plot_ui| {
@@ -1151,9 +1176,11 @@ fn ui_system(
                                 .collect();
                             plot_ui.line(Line::new(points).name("New Burning"));
                         });
+                    handle_plot_click(&new_burning_plot, &mut *playback, sim.frames.len());
 
+                    // --- Burned Area Plot ---
                     ui.label("Burned Area (%)");
-                    Plot::new("BurnedArea")
+                    let burned_area_plot = Plot::new("BurnedArea")
                         .legend(Legend::default())
                         .height(120.0)
                         .show(ui, |plot_ui| {
@@ -1171,9 +1198,11 @@ fn ui_system(
                                 .collect();
                             plot_ui.line(Line::new(points).name("% Burned"));
                         });
+                    handle_plot_click(&burned_area_plot, &mut *playback, sim.frames.len());
                 });
         }
     }
+
     if params.is_wind_toggled {
         egui::Area::new("wind_indicator")
             .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 20.0))
@@ -1185,8 +1214,6 @@ fn ui_system(
                 let painter = ui.painter();
 
                 let center = rect.center() - egui::vec2(0.0, 10.0);
-
-                // Draw compass background
 
                 let compass_radius = 50.0;
 
@@ -1228,80 +1255,20 @@ fn ui_system(
                     egui::Color32::LIGHT_GRAY,
                 );
 
-                // Calculate arrow properties
-
-                // The angle from the slider indicates where the wind is COMING FROM.
-
-                // The arrow should point in the direction the wind is GOING TO.
-
-                // For 0 degrees to be North, and rotate clockwise for increasing angles:
-
-                // Egui's +Y is down, +X is right.
-
-                // North (0 deg) should be straight up (-Y).
-
-                // East (90 deg) should be straight right (+X).
-
-                // South (180 deg) should be straight down (+Y).
-
-                // West (270 deg) should be straight left (-X).
-
-                // Convert angle from degrees to radians, adjust for coordinate system.
-
-                // 0 degrees North (up) in Egui is -PI/2 or 270 degrees in standard math unit circle.
-
-                // Clockwise rotation means increasing angle reduces Y and increases X for first quadrant.
-
                 let wind_goes_to_angle_rad = (params.wind_angle as f32).to_radians();
 
-                // To make 0 degrees point North and rotate clockwise:
-
-                // Egui's coordinate system: +X right, +Y down.
-
-                // North: (0, -1)
-
-                // East:  (1, 0)
-
-                // South: (0, 1)
-
-                // West:  (-1, 0)
-
-                // We want:
-
-                // Angle 0 (N) -> (0, -1)
-
-                // Angle 90 (E) -> (1, 0)
-
-                // Angle 180 (S) -> (0, 1)
-
-                // Angle 270 (W) -> (-1, 0)
-
-                // This mapping is achieved by `(sin(angle), cos(angle))` if 0 degrees is positive X
-
-                // and positive angle is counter-clockwise.
-
-                // Since our angle is already clockwise from North, we can directly use:
-
                 let dir_x = wind_goes_to_angle_rad.sin();
-
-                let dir_y = -wind_goes_to_angle_rad.cos(); // Negate cos to make North point up (-Y)
+                let dir_y = -wind_goes_to_angle_rad.cos();
 
                 let dir = egui::vec2(dir_x, dir_y);
 
-                // Strength affects length (slider range 1-100)
-
                 let max_len = compass_radius - 5.0;
-
                 let min_len = 10.0;
 
                 let strength_ratio = (params.wind_strength.saturating_sub(1)) as f32 / 99.0;
-
                 let length = min_len + strength_ratio * (max_len - min_len);
 
-                // Center the arrow within the compass
-
                 let arrow_base = center - dir * length / 2.0;
-
                 let arrow_vec = dir * length;
 
                 painter.arrow(
@@ -1309,8 +1276,6 @@ fn ui_system(
                     arrow_vec,
                     egui::Stroke::new(3.0, egui::Color32::from_rgb(255, 100, 100)),
                 );
-
-                // Draw strength text below the compass
 
                 let strength_text = format!("{} km/h", params.wind_strength);
 
