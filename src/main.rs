@@ -435,8 +435,7 @@ fn simulation_update_system(
                     height,
                 });
 
-                // Reset stats and playback
-                commands.insert_resource(SimulationStats::new(1, None));
+                // Do NOT reset stats to all zeros here. We'll do that from the first frame.
                 playback.paused = true;
                 playback.jump_to_frame = Some(0);
 
@@ -444,17 +443,11 @@ fn simulation_update_system(
             }
 
             SimulationFrameMsg::Frame(frame) => {
-                // If Simulation is available, push frame
                 if let Some(ref mut sim) = sim {
+                    let is_first_frame = sim.frames.is_empty();
                     sim.frames.push(frame.clone());
 
-                    if sim.frames.len() >= 1 && loading.0 {
-                        loading.0 = false;
-                        playback.paused = false;
-                        spawn_scene(&mut commands);
-                    }
-
-                    // Update stats
+                    // --- Compute stats for this frame ---
                     let mut trees = 0;
                     let mut burning_trees = 0;
                     let mut tree_ashes = 0;
@@ -476,28 +469,48 @@ fn simulation_update_system(
                         }
                     }
 
-                    let frame_index = sim.frames.len() - 1;
-
-                    if stats.trees_over_time.len() <= frame_index {
-                        stats.trees_over_time.push(trees);
-                        stats.burning_trees_over_time.push(burning_trees);
-                        stats.tree_ashes_over_time.push(tree_ashes);
-                        stats.grasses_over_time.push(grasses);
-                        stats.burning_grasses_over_time.push(burning_grasses);
-                        stats.grass_ashes_over_time.push(grass_ashes);
+                    if is_first_frame {
+                        // Overwrite the stats resource with first-frame stats
+                        commands.insert_resource(SimulationStats {
+                            frame_counter: 1,
+                            trees_over_time: vec![trees],
+                            burning_trees_over_time: vec![burning_trees],
+                            tree_ashes_over_time: vec![tree_ashes],
+                            grasses_over_time: vec![grasses],
+                            burning_grasses_over_time: vec![burning_grasses],
+                            grass_ashes_over_time: vec![grass_ashes],
+                        });
                     } else {
-                        stats.trees_over_time[frame_index] = trees;
-                        stats.burning_trees_over_time[frame_index] = burning_trees;
-                        stats.tree_ashes_over_time[frame_index] = tree_ashes;
-                        stats.grasses_over_time[frame_index] = grasses;
-                        stats.burning_grasses_over_time[frame_index] = burning_grasses;
-                        stats.grass_ashes_over_time[frame_index] = grass_ashes;
+                        // Update stats resource as normal
+                        let frame_index = sim.frames.len() - 1;
+
+                        if stats.trees_over_time.len() <= frame_index {
+                            stats.trees_over_time.push(trees);
+                            stats.burning_trees_over_time.push(burning_trees);
+                            stats.tree_ashes_over_time.push(tree_ashes);
+                            stats.grasses_over_time.push(grasses);
+                            stats.burning_grasses_over_time.push(burning_grasses);
+                            stats.grass_ashes_over_time.push(grass_ashes);
+                        } else {
+                            stats.trees_over_time[frame_index] = trees;
+                            stats.burning_trees_over_time[frame_index] = burning_trees;
+                            stats.tree_ashes_over_time[frame_index] = tree_ashes;
+                            stats.grasses_over_time[frame_index] = grasses;
+                            stats.burning_grasses_over_time[frame_index] = burning_grasses;
+                            stats.grass_ashes_over_time[frame_index] = grass_ashes;
+                        }
+
+                        stats.frame_counter = sim.frames.len();
                     }
 
-                    stats.frame_counter = sim.frames.len();
+                    // Start scene after at least one frame received
+                    if sim.frames.len() >= 1 && loading.0 {
+                        loading.0 = false;
+                        playback.paused = false;
+                        spawn_scene(&mut commands);
+                    }
                 } else if *has_started {
-                    // Simulation resource was just inserted but system didn't get fresh ResMut yet
-                    // Insert manually with first frame
+                    // If Simulation wasn't available, create both Simulation and Stats resources here
                     let width = frame[0].len();
                     let height = frame.len();
                     commands.insert_resource(Simulation {
@@ -507,9 +520,7 @@ fn simulation_update_system(
                         height,
                     });
 
-                    stats.frame_counter = 1;
-
-                    // Update stats for frame 0
+                    // Calculate stats for this very first frame
                     let mut trees = 0;
                     let mut burning_trees = 0;
                     let mut tree_ashes = 0;
@@ -531,12 +542,15 @@ fn simulation_update_system(
                         }
                     }
 
-                    stats.trees_over_time = vec![trees];
-                    stats.burning_trees_over_time = vec![burning_trees];
-                    stats.tree_ashes_over_time = vec![tree_ashes];
-                    stats.grasses_over_time = vec![grasses];
-                    stats.burning_grasses_over_time = vec![burning_grasses];
-                    stats.grass_ashes_over_time = vec![grass_ashes];
+                    commands.insert_resource(SimulationStats {
+                        frame_counter: 1,
+                        trees_over_time: vec![trees],
+                        burning_trees_over_time: vec![burning_trees],
+                        tree_ashes_over_time: vec![tree_ashes],
+                        grasses_over_time: vec![grasses],
+                        burning_grasses_over_time: vec![burning_grasses],
+                        grass_ashes_over_time: vec![grass_ashes],
+                    });
                 }
             }
 
