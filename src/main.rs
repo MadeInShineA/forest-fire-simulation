@@ -726,9 +726,6 @@ fn advance_frame_system(
     } else if !playback.paused && ticked {
         if next < last {
             next += 1;
-        } else {
-            next = 0;
-            playback.paused = true;
         }
     }
     sim.current = next;
