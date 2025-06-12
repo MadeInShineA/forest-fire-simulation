@@ -59,8 +59,11 @@ struct SimulationParams {
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct SimControl {
+    #[serde(rename = "windAngle")]
     pub wind_angle: Option<i32>,
+    #[serde(rename = "windStrength")]
     pub wind_strength: Option<i32>,
+    #[serde(rename = "windEnabled")]
     pub wind_enabled: Option<bool>,
     pub paused: Option<bool>,
     pub step: Option<bool>,
@@ -890,7 +893,6 @@ fn ui_system(
                         wind_angle: Some(params.wind_angle as i32),
                         wind_strength: Some(params.wind_strength as i32),
                         wind_enabled: Some(params.is_wind_toggled),
-                        step: Some(true),
                         ..Default::default()
                     });
                 }
