@@ -1,13 +1,12 @@
 package sim
 
 import JsonFormats._
-import scala.util.{Random, Try, Using}
-import java.io.PrintWriter
+import scala.util.{Random, Using, Try}
+import java.io.{FileWriter, PrintWriter}
 import play.api.libs.json._
 import scala.io.Source
 
 object Main extends App {
-  // --- Default parameters ---
   val defaultWidth = 20
   val defaultHeight = 20
   val defaultOnFireTreePercent = 15
@@ -16,7 +15,7 @@ object Main extends App {
   val defaultWindAngle = 0
   val defaultWindStrength = 1
 
-  // --- Parse command-line args or fall back to defaults ---
+  // Parse command-line args or fall back to defaults
   val filteredArgs = args.dropWhile(_ == "--")
   val parsedArgs = filteredArgs.map(_.toIntOption).toList
   val finalArgs = (parsedArgs ++ List(
@@ -40,44 +39,26 @@ object Main extends App {
   ) = finalArgs.toArray
 
   println(
-    s"Using parameters: width=$width, height=$height, onFireTreesPercent=$onFireTreesPercent, " +
-      s"onFireGrassPercent=$onFireGrassPercent, isWindEnable=$enableWind, " +
-      s"windAngle=$windAngleArg, windStrength=$windStrengthArg"
+    s"Using parameters: width=$width, height=$height, onFireTreesPercent=$onFireTreesPercent, onFireGrassPercent=$onFireGrassPercent, isWindEnable=$enableWind, windAngle=$windAngleArg, windStrength=$windStrengthArg"
   )
 
-  // --- Read existing control JSON or default ---
-  val initialControl = Try(
-    Json.parse(Source.fromFile("assets/sim_control.json").mkString)
-  ).getOrElse(Json.obj())
-
-  val initWindAngle =
-    (initialControl \ "windAngle").asOpt[Int].getOrElse(windAngleArg)
-  val initWindStrength =
-    (initialControl \ "windStrength").asOpt[Int].getOrElse(windStrengthArg)
-  val initIsWindEnabled =
-    (initialControl \ "windEnabled").asOpt[Boolean].getOrElse(enableWind == 1)
-
-  // --- Initialize grid WITHOUT an extra step ---
   var grid = new Grid(width, height)
     .igniteRandomFires(onFireTreesPercent, onFireGrassPercent)
 
-  // --- Open NDJSON file for streaming, auto-flush on each println ---
-  val out = new PrintWriter(
-    "assets/simulation_stream.ndjson",
-    "UTF-8",
-    autoFlush = true
-  )
-
   // Write metadata and the true initial frame
-  val metadata = Json.obj("width" -> width, "height" -> height)
-  out.println(Json.stringify(metadata))
-  out.println(Json.stringify(Json.toJson(grid.encodeCells)))
+  Using.resource(new PrintWriter("assets/simulation_stream.ndjson")) { out =>
+    val metadata = Json.obj("width" -> width, "height" -> height)
+    out.println(Json.stringify(metadata))
+    out.println(Json.stringify(Json.toJson(grid.encodeCells)))
+  }
 
-  // --- Append subsequent frames in loop (no sleeps!) ---
-  var lastStepSeen = false
+  Thread.sleep(100)
+
+  // Append subsequent frames in loop
+  val out = new FileWriter("assets/simulation_stream.ndjson", true)
+  var lastStepSeen: Boolean = false
 
   while (true) {
-    // Re-read the control file each iteration
     val control = Try(
       Json.parse(Source.fromFile("assets/sim_control.json").mkString)
     ).getOrElse(Json.obj())
@@ -96,21 +77,21 @@ object Main extends App {
     if (!paused || doStep) {
       println(s"[DEBUG] Advancing simulation (paused=$paused, doStep=$doStep)")
 
-      // Advance simulation
       grid = grid.nextStep(isWindEnabled, windAngle, windStrength)
 
-      // Emit one JSON line per frame
-      out.println(Json.stringify(Json.toJson(grid.encodeCells)))
+      out.write(Json.stringify(Json.toJson(grid.encodeCells)) + "\n")
+      out.flush()
 
-      // If we stepped only once, clear the step flag
       if (doStep) {
         val updated = control.as[JsObject] + ("step" -> JsBoolean(false))
-        Using.resource(new PrintWriter("assets/sim_control.json", "UTF-8")) {
-          writer =>
-            writer.println(Json.prettyPrint(updated))
+        Using.resource(new PrintWriter("assets/sim_control.json")) { writer =>
+          writer.println(Json.prettyPrint(updated))
         }
       }
+
+      Thread.sleep(100)
+    } else {
+      Thread.sleep(20)
     }
-    // otherwise, immediately loop and re-check control
   }
 }

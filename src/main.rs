@@ -879,6 +879,10 @@ fn space_pause_resume_system(
 ) {
     if keys.just_pressed(KeyCode::Space) {
         playback.paused = !playback.paused;
+        update_sim_control(SimControl {
+            paused: Some(playback.paused),
+            ..Default::default()
+        });
     }
 }
 
