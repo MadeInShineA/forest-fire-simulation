@@ -3,7 +3,8 @@ use bevy::input::ButtonInput;
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
-use egui_plot::{Legend, Line, Plot, PlotPoints, PlotResponse};
+use crossbeam_channel::{unbounded, Receiver, Sender};
+use egui_plot::{Legend, Line, Plot, PlotPoints};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -19,11 +20,10 @@ use std::{
     thread,
 };
 
+//──────────────────── Resources & Data Types ──────────────────────//
+
 #[derive(Resource)]
 struct FsWatcher(pub notify::RecommendedWatcher);
-
-// --- Use crossbeam_channel for thread-safe Bevy resources ---
-use crossbeam_channel::{unbounded, Receiver, Sender};
 
 enum SimulationFrameMsg {
     Metadata { width: usize, height: usize },
@@ -31,7 +31,6 @@ enum SimulationFrameMsg {
     SimulationEnded,
 }
 
-// Channel as a Bevy resource (crossbeam_channel is Sync!)
 #[derive(Resource)]
 struct NdjsonChannel(pub Receiver<SimulationFrameMsg>);
 
@@ -42,6 +41,7 @@ struct Simulation {
     width: usize,
     height: usize,
 }
+
 #[derive(Resource, Default)]
 struct FrameTimer(Timer);
 
@@ -59,46 +59,14 @@ struct SimulationParams {
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct SimControl {
-    pub windAngle: Option<i32>,
-    pub windStrength: Option<i32>,
-    pub windEnabled: Option<bool>,
+    pub wind_angle: Option<i32>,
+    pub wind_strength: Option<i32>,
+    pub wind_enabled: Option<bool>,
     pub paused: Option<bool>,
     pub step: Option<bool>,
 }
 
 const CONTROL_PATH: &str = "assets/sim_control.json";
-
-// Reads current sim_control.json, or default if not found
-fn read_sim_control() -> SimControl {
-    if let Ok(content) = fs::read_to_string(CONTROL_PATH) {
-        serde_json::from_str(&content).unwrap_or_default()
-    } else {
-        SimControl::default()
-    }
-}
-
-fn update_sim_control(update: SimControl) {
-    let mut control = read_sim_control();
-
-    if let Some(val) = update.windAngle {
-        control.windAngle = Some(val);
-    }
-    if let Some(val) = update.windStrength {
-        control.windStrength = Some(val);
-    }
-    if let Some(val) = update.windEnabled {
-        control.windEnabled = Some(val);
-    }
-    if let Some(val) = update.paused {
-        control.paused = Some(val);
-    }
-
-    // Always reset step to false unless explicitly set
-    control.step = update.step.or(Some(false));
-
-    let json = serde_json::to_string_pretty(&control).unwrap();
-    fs::write(CONTROL_PATH, json).expect("Failed to write sim_control.json");
-}
 
 #[derive(Resource, Default)]
 struct PlaybackControl {
@@ -122,7 +90,7 @@ struct SimulationStats {
 impl SimulationStats {
     fn new(total_frames: usize, initial_stats: Option<(i64, i64, i64, i64, i64, i64)>) -> Self {
         let mut stats = Self {
-            frame_counter: 0, // <-- ADD THIS LINE
+            frame_counter: 0,
             trees_over_time: vec![0; total_frames],
             burning_trees_over_time: vec![0; total_frames],
             tree_ashes_over_time: vec![0; total_frames],
@@ -141,6 +109,7 @@ impl SimulationStats {
         stats
     }
 }
+
 #[derive(Resource)]
 struct CachedAssets {
     meshes: HashMap<&'static str, Handle<Mesh>>,
@@ -160,15 +129,13 @@ struct ShowGraphs(pub bool);
 struct NdjsonTailingHandle(Option<thread::JoinHandle<()>>);
 #[derive(Resource, Default)]
 struct NdjsonKillSwitch(pub Arc<Mutex<bool>>);
-
-#[derive(Resource)]
-struct LoadingScreen(pub bool);
-
-#[derive(Resource)]
+#[derive(Resource, Default)]
 struct LoadingTextTimer {
     timer: Timer,
     dot_count: usize,
 }
+#[derive(Resource)]
+struct LoadingScreen(pub bool);
 
 #[derive(Deserialize)]
 struct FrameMeta {
@@ -176,13 +143,40 @@ struct FrameMeta {
     height: usize,
 }
 
-// ------------- NDJSON Tailing Thread -------------
+//──────────────────── File Helpers ──────────────────────//
+
+fn read_sim_control() -> SimControl {
+    if let Ok(content) = fs::read_to_string(CONTROL_PATH) {
+        serde_json::from_str(&content).unwrap_or_default()
+    } else {
+        SimControl::default()
+    }
+}
+fn update_sim_control(update: SimControl) {
+    let mut control = read_sim_control();
+    if let Some(val) = update.wind_angle {
+        control.wind_angle = Some(val);
+    }
+    if let Some(val) = update.wind_strength {
+        control.wind_strength = Some(val);
+    }
+    if let Some(val) = update.wind_enabled {
+        control.wind_enabled = Some(val);
+    }
+    if let Some(val) = update.paused {
+        control.paused = Some(val);
+    }
+    control.step = update.step.or(Some(false));
+    let json = serde_json::to_string_pretty(&control).unwrap();
+    fs::write(CONTROL_PATH, json).expect("Failed to write sim_control.json");
+}
+
+//──────────────────── NDJSON File Watcher ──────────────────────//
 
 fn spawn_ndjson_tailer(
     tx: Sender<SimulationFrameMsg>,
     path: &str,
 ) -> notify::Result<RecommendedWatcher> {
-    // 1) Watch the parent directory so we catch the file creation + updates
     let parent = Path::new(path)
         .parent()
         .expect("assets directory must exist");
@@ -195,10 +189,9 @@ fn spawn_ndjson_tailer(
     )?;
     watcher.watch(parent, RecursiveMode::NonRecursive)?;
 
-    // 2) Spawn a thread to open, read the first two lines, then tail
     let path_buf = Path::new(path).to_path_buf();
     thread::spawn(move || {
-        // 2a) Wait until the file is created
+        // Wait until file exists
         let file = loop {
             match File::open(&path_buf) {
                 Ok(f) => break f,
@@ -209,26 +202,21 @@ fn spawn_ndjson_tailer(
         let mut position = 0u64;
         let mut line = String::new();
 
-        // 2b) Read first non-empty line: metadata
+        // Read metadata
         let meta = loop {
             line.clear();
             if reader.read_line(&mut line).unwrap() > 0 {
                 let trimmed = line.trim();
                 if trimmed.is_empty() {
-                    // skip blank
                     continue;
                 }
-                // advance position
                 position += line.len() as u64;
-                // parse metadata
                 if let Ok(m) = serde_json::from_str::<FrameMeta>(trimmed) {
                     break m;
                 } else {
                     eprintln!("spawn_ndjson_tailer: first line not metadata, retrying");
-                    continue;
                 }
             }
-            // no data yet
             thread::sleep(Duration::from_millis(10));
         };
         let _ = tx.send(SimulationFrameMsg::Metadata {
@@ -236,7 +224,7 @@ fn spawn_ndjson_tailer(
             height: meta.height,
         });
 
-        // 2c) Read next non-empty line: initial frame
+        // Read first frame
         let _ = loop {
             line.clear();
             if reader.read_line(&mut line).unwrap() > 0 {
@@ -250,19 +238,16 @@ fn spawn_ndjson_tailer(
                     break;
                 } else {
                     eprintln!("spawn_ndjson_tailer: second line not frame, retrying");
-                    continue;
                 }
             }
             thread::sleep(Duration::from_millis(10));
         };
 
-        // 2d) Tail new frames on each Modify
+        // Tail further frames
         while let Ok(res_event) = rx_fs.recv() {
             if let Ok(event) = res_event {
                 if matches!(event.kind, EventKind::Modify(_)) {
-                    // seek to last read position
                     let _ = reader.seek(SeekFrom::Start(position));
-                    // read all new lines
                     while let Ok(n) = reader.read_line(&mut line) {
                         if n == 0 {
                             break;
@@ -279,290 +264,14 @@ fn spawn_ndjson_tailer(
                 }
             }
         }
-
-        // 2e) Signal end-of-stream
         let _ = tx.send(SimulationFrameMsg::SimulationEnded);
     });
 
     Ok(watcher)
 }
-// ------------- App Entry -------------
-fn main() {
-    let kill_switch = Arc::new(Mutex::new(false));
-    let (_tx, rx) = unbounded::<SimulationFrameMsg>();
 
-    App::new()
-        .insert_resource(ClearColor(Color::rgb(0.05, 0.05, 0.1)))
-        .insert_resource(FrameTimer(Timer::from_seconds(0.4, TimerMode::Repeating)))
-        .insert_resource(LoadingScreen(false))
-        .insert_resource(LoadingTextTimer {
-            timer: Timer::from_seconds(0.5, TimerMode::Repeating),
-            dot_count: 0,
-        })
-        .insert_resource(PlaybackControl {
-            speed: 0.4,
-            ..default()
-        })
-        .insert_resource(SimulationParams {
-            width: 20,
-            height: 20,
-            burning_trees: 15,
-            burning_grasses: 20,
-            is_wind_toggled: false,
-            wind_angle: 0,
-            wind_strength: 1,
-            trigger_simulation: false,
-        })
-        .insert_resource(SimulationStats::new(1, None))
-        .insert_resource(ShowGraphs(false))
-        .insert_resource(NdjsonChannel(rx))
-        .insert_resource(NdjsonTailingHandle(None))
-        .insert_resource(NdjsonKillSwitch(kill_switch.clone()))
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "🔥 Forest Fire Simulation 3D".into(),
-                resolution: (1280., 800.).into(),
-                resizable: false,
-                mode: bevy::window::WindowMode::Fullscreen,
-                ..default()
-            }),
-            ..default()
-        }))
-        .add_plugins(EguiPlugin)
-        .add_systems(Startup, setup_assets)
-        .add_systems(
-            Update,
-            (
-                simulation_update_system,
-                ui_system,
-                advance_frame_system,
-                camera_movement_system,
-                space_pause_resume_system,
-                start_simulation_button_system,
-            ),
-        )
-        .run();
-}
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper to spawn camera & lights for a fresh simulation run
+//──────────────────── Asset Setup ──────────────────────//
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Start Simulation Button Handler
-fn start_simulation_button_system(
-    mut params: ResMut<SimulationParams>,
-    mut commands: Commands,
-    mut playback: ResMut<PlaybackControl>,
-    mut loading: ResMut<LoadingScreen>,
-    old_entities: Query<Entity, With<SimulationEntity>>,
-) {
-    if !params.trigger_simulation || loading.0 {
-        return;
-    }
-    params.trigger_simulation = false;
-
-    // 1) Despawn previous simulation entities
-    for e in old_entities.iter() {
-        commands.entity(e).despawn_recursive();
-    }
-
-    // 2) Show loading screen and pause playback
-    loading.0 = true;
-    playback.paused = true;
-    playback.jump_to_frame = Some(0);
-
-    // 3) Remove old NDJSON simulation stream
-    let _ = std::fs::remove_file("assets/simulation_stream.ndjson");
-
-    // 4) Start the backend simulation subprocess
-    let cmdline = vec![
-        params.width.to_string(),
-        params.height.to_string(),
-        params.burning_trees.to_string(),
-        params.burning_grasses.to_string(),
-        (params.is_wind_toggled as i32).to_string(),
-        params.wind_angle.to_string(),
-        params.wind_strength.to_string(),
-    ];
-    let full_cmd = format!("sh run-sim-ndjson.sh {}", cmdline.join(" "));
-    std::thread::spawn(move || {
-        let _ = Command::new("sh")
-            .arg("-c")
-            .arg(full_cmd)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn();
-    });
-
-    // 5) New: hook up a filesystem‐watcher tailer instead of manual polling
-    let (tx, rx) = unbounded::<SimulationFrameMsg>();
-    commands.insert_resource(NdjsonChannel(rx));
-    let watcher = spawn_ndjson_tailer(tx, "assets/simulation_stream.ndjson")
-        .expect("Failed to watch NDJSON file");
-    commands.insert_resource(FsWatcher(watcher));
-
-    // 6) Clear old simulation state & insert new stats resource
-    commands.remove_resource::<Simulation>();
-    commands.insert_resource(SimulationStats::new(1, None));
-
-    // 7) Write sim_control.json with all values
-    update_sim_control(SimControl {
-        paused: Some(false),
-        windEnabled: Some(params.is_wind_toggled),
-        windAngle: Some(params.wind_angle as i32),
-        windStrength: Some(params.wind_strength as i32),
-        step: Some(false),
-    });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Simulation NDJSON Receiver System
-fn simulation_update_system(
-    mut commands: Commands,
-    ndjson: Res<NdjsonChannel>,
-    mut stats: ResMut<SimulationStats>,
-    mut loading: ResMut<LoadingScreen>,
-    mut playback: ResMut<PlaybackControl>,
-    mut sim: Option<ResMut<Simulation>>,
-    mut has_started: Local<bool>,
-) {
-    while let Ok(msg) = ndjson.0.try_recv() {
-        match msg {
-            SimulationFrameMsg::Metadata { width, height } => {
-                // Initialize Simulation resource
-                commands.insert_resource(Simulation {
-                    frames: Vec::new(),
-                    current: 0,
-                    width,
-                    height,
-                });
-
-                // Do NOT reset stats to all zeros here. We'll do that from the first frame.
-                playback.paused = true;
-                playback.jump_to_frame = Some(0);
-
-                *has_started = true;
-            }
-
-            SimulationFrameMsg::Frame(frame) => {
-                if let Some(ref mut sim) = sim {
-                    let is_first_frame = sim.frames.is_empty();
-                    sim.frames.push(frame.clone());
-
-                    // --- Compute stats for this frame ---
-                    let mut trees = 0;
-                    let mut burning_trees = 0;
-                    let mut tree_ashes = 0;
-                    let mut grasses = 0;
-                    let mut burning_grasses = 0;
-                    let mut grass_ashes = 0;
-
-                    for row in &frame {
-                        for cell in row {
-                            match cell.as_str() {
-                                "T" => trees += 1,
-                                "*" | "**" | "***" => burning_trees += 1,
-                                "A" => tree_ashes += 1,
-                                "G" => grasses += 1,
-                                "+" => burning_grasses += 1,
-                                "-" => grass_ashes += 1,
-                                _ => {}
-                            }
-                        }
-                    }
-
-                    if is_first_frame {
-                        // Overwrite the stats resource with first-frame stats
-                        commands.insert_resource(SimulationStats {
-                            frame_counter: 1,
-                            trees_over_time: vec![trees],
-                            burning_trees_over_time: vec![burning_trees],
-                            tree_ashes_over_time: vec![tree_ashes],
-                            grasses_over_time: vec![grasses],
-                            burning_grasses_over_time: vec![burning_grasses],
-                            grass_ashes_over_time: vec![grass_ashes],
-                        });
-                    } else {
-                        // Update stats resource as normal
-                        let frame_index = sim.frames.len() - 1;
-
-                        if stats.trees_over_time.len() <= frame_index {
-                            stats.trees_over_time.push(trees);
-                            stats.burning_trees_over_time.push(burning_trees);
-                            stats.tree_ashes_over_time.push(tree_ashes);
-                            stats.grasses_over_time.push(grasses);
-                            stats.burning_grasses_over_time.push(burning_grasses);
-                            stats.grass_ashes_over_time.push(grass_ashes);
-                        } else {
-                            stats.trees_over_time[frame_index] = trees;
-                            stats.burning_trees_over_time[frame_index] = burning_trees;
-                            stats.tree_ashes_over_time[frame_index] = tree_ashes;
-                            stats.grasses_over_time[frame_index] = grasses;
-                            stats.burning_grasses_over_time[frame_index] = burning_grasses;
-                            stats.grass_ashes_over_time[frame_index] = grass_ashes;
-                        }
-
-                        stats.frame_counter = sim.frames.len();
-                    }
-
-                    // Start scene after at least one frame received
-                    if sim.frames.len() >= 1 && loading.0 {
-                        loading.0 = false;
-                        playback.paused = false;
-                        spawn_scene(&mut commands);
-                    }
-                } else if *has_started {
-                    // If Simulation wasn't available, create both Simulation and Stats resources here
-                    let width = frame[0].len();
-                    let height = frame.len();
-                    commands.insert_resource(Simulation {
-                        frames: vec![frame.clone()],
-                        current: 0,
-                        width,
-                        height,
-                    });
-
-                    // Calculate stats for this very first frame
-                    let mut trees = 0;
-                    let mut burning_trees = 0;
-                    let mut tree_ashes = 0;
-                    let mut grasses = 0;
-                    let mut burning_grasses = 0;
-                    let mut grass_ashes = 0;
-
-                    for row in &frame {
-                        for cell in row {
-                            match cell.as_str() {
-                                "T" => trees += 1,
-                                "*" | "**" | "***" => burning_trees += 1,
-                                "A" => tree_ashes += 1,
-                                "G" => grasses += 1,
-                                "+" => burning_grasses += 1,
-                                "-" => grass_ashes += 1,
-                                _ => {}
-                            }
-                        }
-                    }
-
-                    commands.insert_resource(SimulationStats {
-                        frame_counter: 1,
-                        trees_over_time: vec![trees],
-                        burning_trees_over_time: vec![burning_trees],
-                        tree_ashes_over_time: vec![tree_ashes],
-                        grasses_over_time: vec![grasses],
-                        burning_grasses_over_time: vec![burning_grasses],
-                        grass_ashes_over_time: vec![grass_ashes],
-                    });
-                }
-            }
-
-            SimulationFrameMsg::SimulationEnded => {
-                // Optional: handle graceful shutdown
-            }
-        }
-    }
-}
-
-// ------------- Asset setup -------------
 fn setup_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -673,7 +382,261 @@ fn setup_assets(
     });
 }
 
-// ------------- Frame advance system -------------
+//──────────────────── Kind/Spawn helpers ──────────────────────//
+
+fn kind_from_str(cell: &str) -> &'static str {
+    match cell {
+        "G" => "grass",
+        "A" => "ash",
+        "W" => "water",
+        "+" => "burning_grass",
+        "-" => "burnt_grass",
+        "*" => "burning_leaves1",
+        "**" => "burning_leaves2",
+        "***" => "burning_leaves3",
+        other => panic!(
+            "Unknown cell type encountered in kind_from_str: '{}'",
+            other
+        ),
+    }
+}
+fn spawn_cell(commands: &mut Commands, cache: &CachedAssets, kind: &str, pos: Vec3) {
+    commands.spawn((
+        PbrBundle {
+            mesh: cache.meshes[kind].clone(),
+            material: cache.materials[kind].clone(),
+            transform: Transform::from_translation(pos),
+            ..default()
+        },
+        CellEntity,
+        SimulationEntity,
+    ));
+}
+
+//──────────────────── Scene Spawner ──────────────────────//
+
+fn spawn_scene(commands: &mut Commands) {
+    commands.spawn((
+        Camera3dBundle {
+            transform: Transform::from_xyz(0.0, 250.0, 400.0).looking_at(Vec3::ZERO, Vec3::Y),
+            ..default()
+        },
+        MainCamera,
+        FlyCamera,
+        SimulationEntity,
+    ));
+    commands.spawn((
+        DirectionalLightBundle {
+            transform: Transform::from_xyz(0.0, 200.0, 100.0).looking_at(Vec3::ZERO, Vec3::Y),
+            directional_light: DirectionalLight {
+                shadows_enabled: false,
+                illuminance: 10_000.0,
+                ..default()
+            },
+            ..default()
+        },
+        SimulationEntity,
+    ));
+    commands.spawn((
+        PointLightBundle {
+            transform: Transform::from_xyz(100.0, 150.0, 100.0),
+            point_light: PointLight {
+                intensity: 5_000.0,
+                range: 500.0,
+                shadows_enabled: false,
+                ..default()
+            },
+            ..default()
+        },
+        SimulationEntity,
+    ));
+    commands.insert_resource(AmbientLight {
+        color: Color::WHITE,
+        brightness: 0.2,
+    });
+}
+
+//──────────────────── Systems: Simulation logic ──────────────────────//
+
+fn start_simulation_button_system(
+    mut params: ResMut<SimulationParams>,
+    mut commands: Commands,
+    mut playback: ResMut<PlaybackControl>,
+    mut loading: ResMut<LoadingScreen>,
+    old_entities: Query<Entity, With<SimulationEntity>>,
+) {
+    if !params.trigger_simulation || loading.0 {
+        return;
+    }
+    params.trigger_simulation = false;
+    for e in old_entities.iter() {
+        commands.entity(e).despawn_recursive();
+    }
+    loading.0 = true;
+    playback.paused = true;
+    playback.jump_to_frame = Some(0);
+
+    let _ = std::fs::remove_file("assets/simulation_stream.ndjson");
+    let cmdline = vec![
+        params.width.to_string(),
+        params.height.to_string(),
+        params.burning_trees.to_string(),
+        params.burning_grasses.to_string(),
+        (params.is_wind_toggled as i32).to_string(),
+        params.wind_angle.to_string(),
+        params.wind_strength.to_string(),
+    ];
+    let full_cmd = format!("sh run-sim-ndjson.sh {}", cmdline.join(" "));
+    std::thread::spawn(move || {
+        let _ = Command::new("sh")
+            .arg("-c")
+            .arg(full_cmd)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    });
+
+    let (tx, rx) = unbounded::<SimulationFrameMsg>();
+    commands.insert_resource(NdjsonChannel(rx));
+    let watcher = spawn_ndjson_tailer(tx, "assets/simulation_stream.ndjson")
+        .expect("Failed to watch NDJSON file");
+    commands.insert_resource(FsWatcher(watcher));
+
+    commands.remove_resource::<Simulation>();
+    commands.insert_resource(SimulationStats::new(1, None));
+
+    update_sim_control(SimControl {
+        paused: Some(false),
+        wind_enabled: Some(params.is_wind_toggled),
+        wind_angle: Some(params.wind_angle as i32),
+        wind_strength: Some(params.wind_strength as i32),
+        step: Some(false),
+    });
+}
+
+fn simulation_update_system(
+    mut commands: Commands,
+    ndjson: Res<NdjsonChannel>,
+    mut stats: ResMut<SimulationStats>,
+    mut loading: ResMut<LoadingScreen>,
+    mut playback: ResMut<PlaybackControl>,
+    mut sim: Option<ResMut<Simulation>>,
+    mut has_started: Local<bool>,
+) {
+    while let Ok(msg) = ndjson.0.try_recv() {
+        match msg {
+            SimulationFrameMsg::Metadata { width, height } => {
+                commands.insert_resource(Simulation {
+                    frames: Vec::new(),
+                    current: 0,
+                    width,
+                    height,
+                });
+                playback.paused = true;
+                playback.jump_to_frame = Some(0);
+                *has_started = true;
+            }
+            SimulationFrameMsg::Frame(frame) => {
+                if let Some(ref mut sim) = sim {
+                    let is_first_frame = sim.frames.is_empty();
+                    sim.frames.push(frame.clone());
+                    let mut trees = 0;
+                    let mut burning_trees = 0;
+                    let mut tree_ashes = 0;
+                    let mut grasses = 0;
+                    let mut burning_grasses = 0;
+                    let mut grass_ashes = 0;
+                    for row in &frame {
+                        for cell in row {
+                            match cell.as_str() {
+                                "T" => trees += 1,
+                                "*" | "**" | "***" => burning_trees += 1,
+                                "A" => tree_ashes += 1,
+                                "G" => grasses += 1,
+                                "+" => burning_grasses += 1,
+                                "-" => grass_ashes += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+                    if is_first_frame {
+                        commands.insert_resource(SimulationStats {
+                            frame_counter: 1,
+                            trees_over_time: vec![trees],
+                            burning_trees_over_time: vec![burning_trees],
+                            tree_ashes_over_time: vec![tree_ashes],
+                            grasses_over_time: vec![grasses],
+                            burning_grasses_over_time: vec![burning_grasses],
+                            grass_ashes_over_time: vec![grass_ashes],
+                        });
+                    } else {
+                        let frame_index = sim.frames.len() - 1;
+                        if stats.trees_over_time.len() <= frame_index {
+                            stats.trees_over_time.push(trees);
+                            stats.burning_trees_over_time.push(burning_trees);
+                            stats.tree_ashes_over_time.push(tree_ashes);
+                            stats.grasses_over_time.push(grasses);
+                            stats.burning_grasses_over_time.push(burning_grasses);
+                            stats.grass_ashes_over_time.push(grass_ashes);
+                        } else {
+                            stats.trees_over_time[frame_index] = trees;
+                            stats.burning_trees_over_time[frame_index] = burning_trees;
+                            stats.tree_ashes_over_time[frame_index] = tree_ashes;
+                            stats.grasses_over_time[frame_index] = grasses;
+                            stats.burning_grasses_over_time[frame_index] = burning_grasses;
+                            stats.grass_ashes_over_time[frame_index] = grass_ashes;
+                        }
+                        stats.frame_counter = sim.frames.len();
+                    }
+                    if sim.frames.len() >= 1 && loading.0 {
+                        loading.0 = false;
+                        playback.paused = false;
+                        spawn_scene(&mut commands);
+                    }
+                } else if *has_started {
+                    let width = frame[0].len();
+                    let height = frame.len();
+                    commands.insert_resource(Simulation {
+                        frames: vec![frame.clone()],
+                        current: 0,
+                        width,
+                        height,
+                    });
+                    let mut trees = 0;
+                    let mut burning_trees = 0;
+                    let mut tree_ashes = 0;
+                    let mut grasses = 0;
+                    let mut burning_grasses = 0;
+                    let mut grass_ashes = 0;
+                    for row in &frame {
+                        for cell in row {
+                            match cell.as_str() {
+                                "T" => trees += 1,
+                                "*" | "**" | "***" => burning_trees += 1,
+                                "A" => tree_ashes += 1,
+                                "G" => grasses += 1,
+                                "+" => burning_grasses += 1,
+                                "-" => grass_ashes += 1,
+                                _ => {}
+                            }
+                        }
+                    }
+                    commands.insert_resource(SimulationStats {
+                        frame_counter: 1,
+                        trees_over_time: vec![trees],
+                        burning_trees_over_time: vec![burning_trees],
+                        tree_ashes_over_time: vec![tree_ashes],
+                        grasses_over_time: vec![grasses],
+                        burning_grasses_over_time: vec![burning_grasses],
+                        grass_ashes_over_time: vec![grass_ashes],
+                    });
+                }
+            }
+            SimulationFrameMsg::SimulationEnded => {}
+        }
+    }
+}
+
 fn advance_frame_system(
     mut commands: Commands,
     time: Res<Time>,
@@ -682,9 +645,9 @@ fn advance_frame_system(
     mut playback: ResMut<PlaybackControl>,
     cells: Query<Entity, With<CellEntity>>,
     cache: Res<CachedAssets>,
-    mut stats: ResMut<SimulationStats>,
+    _stats: ResMut<SimulationStats>,
 ) {
-    let mut sim = match sim.as_mut() {
+    let sim = match sim.as_mut() {
         Some(s) => s,
         None => return,
     };
@@ -718,12 +681,10 @@ fn advance_frame_system(
         }
         playback.step_back = false;
     } else if playback.step_forward {
-        if sim.current + 1 >= sim.frames.len() {
-            // Do nothing yet — wait for frame to be received
-        } else {
+        if sim.current + 1 < sim.frames.len() {
             next = sim.current + 1;
-            playback.step_forward = false;
         }
+        playback.step_forward = false;
     } else if !playback.paused && ticked {
         if next < last {
             next += 1;
@@ -743,11 +704,10 @@ fn advance_frame_system(
     for (iy, row) in grid.iter().enumerate() {
         for (ix, cell) in row.iter().enumerate() {
             let pos = Vec3::new(
-                offset_x + (width - 1 - ix) as f32 * cell_size * spacing, // flip X
+                offset_x + (width - 1 - ix) as f32 * cell_size * spacing,
                 0.0,
-                offset_z + (height - 1 - iy) as f32 * cell_size * spacing, // flip Z
+                offset_z + (height - 1 - iy) as f32 * cell_size * spacing,
             );
-
             match cell.as_str() {
                 "T" | "*" | "**" | "***" => {
                     spawn_cell(&mut commands, &cache, "trunk", pos + Vec3::Y * 2.0);
@@ -776,37 +736,8 @@ fn advance_frame_system(
     }
 }
 
-// ------------- Kind from string -------------
-fn kind_from_str(cell: &str) -> &'static str {
-    match cell {
-        "G" => "grass",
-        "A" => "ash",
-        "W" => "water",
-        "+" => "burning_grass",
-        "-" => "burnt_grass",
-        "*" => "burning_leaves1",
-        "**" => "burning_leaves2",
-        "***" => "burning_leaves3",
-        other => panic!(
-            "Unknown cell type encountered in kind_from_str: '{}'",
-            other
-        ),
-    }
-}
-fn spawn_cell(commands: &mut Commands, cache: &CachedAssets, kind: &str, pos: Vec3) {
-    commands.spawn((
-        PbrBundle {
-            mesh: cache.meshes[kind].clone(),
-            material: cache.materials[kind].clone(),
-            transform: Transform::from_translation(pos),
-            ..default()
-        },
-        CellEntity,
-        SimulationEntity,
-    ));
-}
+//──────────────────── Systems: Camera, Pause, UI ──────────────────────//
 
-// ------------- Camera movement -------------
 fn camera_movement_system(
     mut contexts: EguiContexts,
     time: Res<Time>,
@@ -816,12 +747,10 @@ fn camera_movement_system(
     mut scroll: EventReader<MouseWheel>,
     mut query: Query<&mut Transform, With<FlyCamera>>,
 ) {
-    // early-out if the mouse is over any UI (side panel, graphs, etc.)
     let ctx = contexts.ctx_mut();
     if ctx.wants_pointer_input() || ctx.wants_pointer_input() {
         return;
     }
-
     let mut transform = match query.get_single_mut() {
         Ok(t) => t,
         Err(_) => return,
@@ -831,7 +760,6 @@ fn camera_movement_system(
     let right: Vec3 = transform.right().into();
     let up = Vec3::Y;
     let speed = 200.0 * time.delta_seconds();
-
     if keys.pressed(KeyCode::KeyW) {
         direction += forward;
     }
@@ -851,11 +779,9 @@ fn camera_movement_system(
         direction -= up;
     }
     transform.translation += direction * speed;
-
     for ev in scroll.read() {
         transform.translation += forward * ev.y * 20.0;
     }
-
     if buttons.pressed(MouseButton::Left) {
         let mut delta = Vec2::ZERO;
         for ev in mouse_motion_events.read() {
@@ -870,7 +796,6 @@ fn camera_movement_system(
     }
 }
 
-// ------------- Pause/Resume -------------
 fn space_pause_resume_system(
     keys: Res<ButtonInput<KeyCode>>,
     mut playback: ResMut<PlaybackControl>,
@@ -889,10 +814,8 @@ fn handle_plot_click<R>(
     playback: &mut PlaybackControl,
     total_frames: usize,
 ) {
-    // Use egui's response for interaction
     if response.response.clicked() {
         if let Some(pos) = response.response.interact_pointer_pos() {
-            // Convert screen position to plot coordinates
             let plot_coords = response.transform.value_from_position(pos);
             let mut frame = plot_coords.x.round() as isize;
             if frame < 0 {
@@ -904,6 +827,7 @@ fn handle_plot_click<R>(
         }
     }
 }
+
 fn ui_system(
     mut contexts: EguiContexts,
     mut params: ResMut<SimulationParams>,
@@ -950,7 +874,6 @@ fn ui_system(
                 &mut params.is_wind_toggled,
                 "Enable wind",
             ));
-
             if params.is_wind_toggled {
                 ui.add(egui::Slider::new(&mut params.wind_angle, 0..=359).text("Wind angle °"));
                 ui.add(
@@ -958,16 +881,15 @@ fn ui_system(
                         .text("Wind strength km/h"),
                 );
             }
-
             ui.horizontal(|ui| {
                 if ui.button("Start Simulation").clicked() {
                     params.trigger_simulation = true;
                 }
                 if sim_ref.is_some() && ui.button("Update Wind").clicked() {
                     update_sim_control(SimControl {
-                        windAngle: Some(params.wind_angle as i32),
-                        windStrength: Some(params.wind_strength as i32),
-                        windEnabled: Some(params.is_wind_toggled),
+                        wind_angle: Some(params.wind_angle as i32),
+                        wind_strength: Some(params.wind_strength as i32),
+                        wind_enabled: Some(params.is_wind_toggled),
                         step: Some(true),
                         ..Default::default()
                     });
@@ -1008,10 +930,8 @@ fn ui_system(
                         playback.jump_to_frame = Some(sim.frames.len().saturating_sub(1));
                     }
                 });
-
                 ui.add(egui::Slider::new(&mut playback.speed, 0.05..=2.0).text("Speed s/frame"));
                 ui.label(format!("Frame: {}/{}", sim.current + 1, sim.frames.len()));
-
                 let mut display_frame = sim.current + 1;
                 if ui
                     .add(egui::Slider::new(&mut display_frame, 1..=sim.frames.len()).text("Frame"))
@@ -1019,7 +939,6 @@ fn ui_system(
                 {
                     playback.jump_to_frame = Some(display_frame - 1);
                 }
-
                 ui.separator();
                 if ui
                     .button(if show_graphs_resource.0 {
@@ -1034,14 +953,13 @@ fn ui_system(
             }
         });
 
-    // ─────────── Graphs ────────────────────
+    // Graphs
     if let Some(sim) = sim_ref {
         let available = stats.trees_over_time.len();
         if available == 0 {
             return;
         }
         let last_index = sim.current.min(available - 1);
-
         let total_trees_over_time: Vec<f64> = (0..=last_index)
             .map(|i| {
                 (stats.trees_over_time[i]
@@ -1049,7 +967,6 @@ fn ui_system(
                     + stats.tree_ashes_over_time[i]) as f64
             })
             .collect();
-
         let total_grass_over_time: Vec<f64> = (0..=last_index)
             .map(|i| {
                 (stats.grasses_over_time[i]
@@ -1057,7 +974,6 @@ fn ui_system(
                     + stats.grass_ashes_over_time[i]) as f64
             })
             .collect();
-
         let initial_total = total_trees_over_time[0] + total_grass_over_time[0];
 
         if show_graphs_resource.0 {
@@ -1065,8 +981,6 @@ fn ui_system(
                 .default_width(550.0)
                 .default_height(700.0)
                 .show(ctx, |ui| {
-                    use egui_plot::{Legend, Line, Plot, PlotPoints};
-
                     macro_rules! plot_percent {
                         ($name:expr, $v:expr, $total:expr) => {{
                             let points: PlotPoints = (0..=last_index)
@@ -1083,8 +997,7 @@ fn ui_system(
                             Line::new(points).name($name)
                         }};
                     }
-
-                    // --- Trees Plot ---
+                    // Trees Plot
                     ui.label("Tree Status (%)");
                     let tree_plot = Plot::new("Trees")
                         .legend(Legend::default())
@@ -1108,7 +1021,7 @@ fn ui_system(
                         });
                     handle_plot_click(&tree_plot, &mut *playback, sim.frames.len());
 
-                    // --- Grasses Plot ---
+                    // Grasses Plot
                     ui.label("Grass Status (%)");
                     let grass_plot = Plot::new("Grasses")
                         .legend(Legend::default())
@@ -1132,7 +1045,7 @@ fn ui_system(
                         });
                     handle_plot_click(&grass_plot, &mut *playback, sim.frames.len());
 
-                    // --- Burning Cells Plot ---
+                    // Burning Cells Plot
                     ui.label("Burning Cells (%)");
                     let burning_plot = Plot::new("Burning")
                         .legend(Legend::default())
@@ -1154,7 +1067,7 @@ fn ui_system(
                         });
                     handle_plot_click(&burning_plot, &mut *playback, sim.frames.len());
 
-                    // --- New Burning Per Step Plot ---
+                    // New Burning Per Step Plot
                     ui.label("New Burning Per Step");
                     let new_burning_plot = Plot::new("NewBurning")
                         .legend(Legend::default())
@@ -1178,7 +1091,7 @@ fn ui_system(
                         });
                     handle_plot_click(&new_burning_plot, &mut *playback, sim.frames.len());
 
-                    // --- Burned Area Plot ---
+                    // Burned Area Plot
                     ui.label("Burned Area (%)");
                     let burned_area_plot = Plot::new("BurnedArea")
                         .legend(Legend::default())
@@ -1203,26 +1116,21 @@ fn ui_system(
         }
     }
 
+    // Wind indicator
     if params.is_wind_toggled {
         egui::Area::new("wind_indicator")
             .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 20.0))
             .show(ctx, |ui| {
                 let desired_size = egui::vec2(120.0, 140.0);
-
                 let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
-
                 let painter = ui.painter();
-
                 let center = rect.center() - egui::vec2(0.0, 10.0);
-
                 let compass_radius = 50.0;
-
                 painter.circle_stroke(
                     center,
                     compass_radius,
                     egui::Stroke::new(1.0, egui::Color32::GRAY),
                 );
-
                 painter.text(
                     center + egui::vec2(0.0, -(compass_radius + 5.0)),
                     egui::Align2::CENTER_CENTER,
@@ -1230,7 +1138,6 @@ fn ui_system(
                     egui::FontId::proportional(12.0),
                     egui::Color32::LIGHT_GRAY,
                 );
-
                 painter.text(
                     center + egui::vec2(0.0, compass_radius + 5.0),
                     egui::Align2::CENTER_CENTER,
@@ -1238,7 +1145,6 @@ fn ui_system(
                     egui::FontId::proportional(12.0),
                     egui::Color32::LIGHT_GRAY,
                 );
-
                 painter.text(
                     center + egui::vec2(compass_radius + 5.0, 0.0),
                     egui::Align2::CENTER_CENTER,
@@ -1246,7 +1152,6 @@ fn ui_system(
                     egui::FontId::proportional(12.0),
                     egui::Color32::LIGHT_GRAY,
                 );
-
                 painter.text(
                     center + egui::vec2(-(compass_radius + 5.0), 0.0),
                     egui::Align2::CENTER_CENTER,
@@ -1254,31 +1159,22 @@ fn ui_system(
                     egui::FontId::proportional(12.0),
                     egui::Color32::LIGHT_GRAY,
                 );
-
                 let wind_goes_to_angle_rad = (params.wind_angle as f32).to_radians();
-
                 let dir_x = wind_goes_to_angle_rad.sin();
                 let dir_y = -wind_goes_to_angle_rad.cos();
-
                 let dir = egui::vec2(dir_x, dir_y);
-
                 let max_len = compass_radius - 5.0;
                 let min_len = 10.0;
-
                 let strength_ratio = (params.wind_strength.saturating_sub(1)) as f32 / 99.0;
                 let length = min_len + strength_ratio * (max_len - min_len);
-
                 let arrow_base = center - dir * length / 2.0;
                 let arrow_vec = dir * length;
-
                 painter.arrow(
                     arrow_base,
                     arrow_vec,
                     egui::Stroke::new(3.0, egui::Color32::from_rgb(255, 100, 100)),
                 );
-
                 let strength_text = format!("{} km/h", params.wind_strength);
-
                 painter.text(
                     rect.center() + egui::vec2(0.0, compass_radius + 5.0),
                     egui::Align2::CENTER_CENTER,
@@ -1290,44 +1186,61 @@ fn ui_system(
     }
 }
 
-// At the bottom or top of your file
-fn spawn_scene(commands: &mut Commands) {
-    commands.spawn((
-        Camera3dBundle {
-            transform: Transform::from_xyz(0.0, 250.0, 400.0).looking_at(Vec3::ZERO, Vec3::Y),
+//──────────────────── App Entrypoint ──────────────────────//
+
+fn main() {
+    let kill_switch = Arc::new(Mutex::new(false));
+    let (_tx, rx) = unbounded::<SimulationFrameMsg>();
+
+    App::new()
+        .insert_resource(ClearColor(Color::rgb(0.05, 0.05, 0.1)))
+        .insert_resource(FrameTimer(Timer::from_seconds(0.4, TimerMode::Repeating)))
+        .insert_resource(LoadingScreen(false))
+        .insert_resource(LoadingTextTimer {
+            timer: Timer::from_seconds(0.5, TimerMode::Repeating),
+            dot_count: 0,
+        })
+        .insert_resource(PlaybackControl {
+            speed: 0.4,
             ..default()
-        },
-        MainCamera,
-        FlyCamera,
-        SimulationEntity,
-    ));
-    commands.spawn((
-        DirectionalLightBundle {
-            transform: Transform::from_xyz(0.0, 200.0, 100.0).looking_at(Vec3::ZERO, Vec3::Y),
-            directional_light: DirectionalLight {
-                shadows_enabled: false,
-                illuminance: 10_000.0,
+        })
+        .insert_resource(SimulationParams {
+            width: 20,
+            height: 20,
+            burning_trees: 15,
+            burning_grasses: 20,
+            is_wind_toggled: false,
+            wind_angle: 0,
+            wind_strength: 1,
+            trigger_simulation: false,
+        })
+        .insert_resource(SimulationStats::new(1, None))
+        .insert_resource(ShowGraphs(false))
+        .insert_resource(NdjsonChannel(rx))
+        .insert_resource(NdjsonTailingHandle(None))
+        .insert_resource(NdjsonKillSwitch(kill_switch.clone()))
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "🔥 Forest Fire Simulation 3D".into(),
+                resolution: (1280., 800.).into(),
+                resizable: false,
+                mode: bevy::window::WindowMode::Fullscreen,
                 ..default()
-            },
+            }),
             ..default()
-        },
-        SimulationEntity,
-    ));
-    commands.spawn((
-        PointLightBundle {
-            transform: Transform::from_xyz(100.0, 150.0, 100.0),
-            point_light: PointLight {
-                intensity: 5_000.0,
-                range: 500.0,
-                shadows_enabled: false,
-                ..default()
-            },
-            ..default()
-        },
-        SimulationEntity,
-    ));
-    commands.insert_resource(AmbientLight {
-        color: Color::WHITE,
-        brightness: 0.2,
-    });
+        }))
+        .add_plugins(EguiPlugin)
+        .add_systems(Startup, setup_assets)
+        .add_systems(
+            Update,
+            (
+                simulation_update_system,
+                ui_system,
+                advance_frame_system,
+                camera_movement_system,
+                space_pause_resume_system,
+                start_simulation_button_system,
+            ),
+        )
+        .run();
 }
