@@ -121,6 +121,10 @@ struct SimulationStats {
     grasses_over_time: Vec<i64>,
     burning_grasses_over_time: Vec<i64>,
     grass_ashes_over_time: Vec<i64>,
+    saplings_over_time: Vec<i64>,
+    burning_saplings_over_time: Vec<i64>,
+    young_trees_over_time: Vec<i64>,
+    burning_young_trees_over_time: Vec<i64>,
 }
 impl SimulationStats {
     fn new(total_frames: usize, initial_stats: Option<(i64, i64, i64, i64, i64, i64)>) -> Self {
@@ -132,6 +136,10 @@ impl SimulationStats {
             grasses_over_time: vec![0; total_frames],
             burning_grasses_over_time: vec![0; total_frames],
             grass_ashes_over_time: vec![0; total_frames],
+            saplings_over_time: vec![0; total_frames],
+            burning_saplings_over_time: vec![0; total_frames],
+            young_trees_over_time: vec![0; total_frames],
+            burning_young_trees_over_time: vec![0; total_frames],
         };
         if let Some((t, bt, ta, g, bg, ga)) = initial_stats {
             stats.trees_over_time[0] = t;
@@ -670,7 +678,7 @@ fn simulation_update_system(
                     width,
                     height,
                 });
-                playback.paused = true; // Always start paused
+                playback.paused = true;
                 playback.jump_to_frame = Some(0);
                 *has_started = true;
             }
@@ -678,17 +686,27 @@ fn simulation_update_system(
                 if let Some(ref mut sim) = sim {
                     let is_first_frame = sim.frames.is_empty();
                     sim.frames.push(frame.clone());
+
                     let mut trees = 0;
                     let mut burning_trees = 0;
                     let mut tree_ashes = 0;
                     let mut grasses = 0;
                     let mut burning_grasses = 0;
                     let mut grass_ashes = 0;
+                    let mut saplings = 0;
+                    let mut burning_saplings = 0;
+                    let mut young_trees = 0;
+                    let mut burning_young_trees = 0;
+
                     for row in &frame {
                         for cell in row {
                             match cell.as_str() {
                                 "T" => trees += 1,
                                 "*" | "**" | "***" => burning_trees += 1,
+                                "s" => saplings += 1,
+                                "!" => burning_saplings += 1,
+                                "y" => young_trees += 1,
+                                "&" | "@" => burning_young_trees += 1,
                                 "A" => tree_ashes += 1,
                                 "G" => grasses += 1,
                                 "+" => burning_grasses += 1,
@@ -697,6 +715,7 @@ fn simulation_update_system(
                             }
                         }
                     }
+
                     if is_first_frame {
                         commands.insert_resource(SimulationStats {
                             frame_counter: 1,
@@ -706,34 +725,44 @@ fn simulation_update_system(
                             grasses_over_time: vec![grasses],
                             burning_grasses_over_time: vec![burning_grasses],
                             grass_ashes_over_time: vec![grass_ashes],
+                            saplings_over_time: vec![saplings],
+                            burning_saplings_over_time: vec![burning_saplings],
+                            young_trees_over_time: vec![young_trees],
+                            burning_young_trees_over_time: vec![burning_young_trees],
                         });
                     } else {
                         let frame_index = sim.frames.len() - 1;
-                        if stats.trees_over_time.len() <= frame_index {
-                            stats.trees_over_time.push(trees);
-                            stats.burning_trees_over_time.push(burning_trees);
-                            stats.tree_ashes_over_time.push(tree_ashes);
-                            stats.grasses_over_time.push(grasses);
-                            stats.burning_grasses_over_time.push(burning_grasses);
-                            stats.grass_ashes_over_time.push(grass_ashes);
-                        } else {
-                            stats.trees_over_time[frame_index] = trees;
-                            stats.burning_trees_over_time[frame_index] = burning_trees;
-                            stats.tree_ashes_over_time[frame_index] = tree_ashes;
-                            stats.grasses_over_time[frame_index] = grasses;
-                            stats.burning_grasses_over_time[frame_index] = burning_grasses;
-                            stats.grass_ashes_over_time[frame_index] = grass_ashes;
+                        macro_rules! ensure_push {
+                            ($vec:expr, $val:expr) => {
+                                if $vec.len() <= frame_index {
+                                    $vec.push($val);
+                                } else {
+                                    $vec[frame_index] = $val;
+                                }
+                            };
                         }
+                        ensure_push!(stats.trees_over_time, trees);
+                        ensure_push!(stats.burning_trees_over_time, burning_trees);
+                        ensure_push!(stats.tree_ashes_over_time, tree_ashes);
+                        ensure_push!(stats.grasses_over_time, grasses);
+                        ensure_push!(stats.burning_grasses_over_time, burning_grasses);
+                        ensure_push!(stats.grass_ashes_over_time, grass_ashes);
+                        ensure_push!(stats.saplings_over_time, saplings);
+                        ensure_push!(stats.burning_saplings_over_time, burning_saplings);
+                        ensure_push!(stats.young_trees_over_time, young_trees);
+                        ensure_push!(stats.burning_young_trees_over_time, burning_young_trees);
+
                         stats.frame_counter = sim.frames.len();
                     }
-                    // Only create the scene after at least one frame, but STAY PAUSED!
+
                     if sim.frames.len() >= 1 && loading.0 {
                         loading.0 = false;
-                        playback.paused = true; // remain paused until user acts
+                        playback.paused = true;
                         playback.jump_to_frame = Some(0);
                         spawn_scene(&mut commands);
                     }
                 } else if *has_started {
+                    // fallback if sim is not yet available
                     let width = frame[0].len();
                     let height = frame.len();
                     commands.insert_resource(Simulation {
@@ -741,34 +770,6 @@ fn simulation_update_system(
                         current: 0,
                         width,
                         height,
-                    });
-                    let mut trees = 0;
-                    let mut burning_trees = 0;
-                    let mut tree_ashes = 0;
-                    let mut grasses = 0;
-                    let mut burning_grasses = 0;
-                    let mut grass_ashes = 0;
-                    for row in &frame {
-                        for cell in row {
-                            match cell.as_str() {
-                                "T" | "y" | "s" => trees += 1,
-                                "*" | "**" | "***" | "!" | "&" | "@" => burning_trees += 1,
-                                "A" => tree_ashes += 1,
-                                "G" => grasses += 1,
-                                "+" => burning_grasses += 1,
-                                "-" => grass_ashes += 1,
-                                _ => {}
-                            }
-                        }
-                    }
-                    commands.insert_resource(SimulationStats {
-                        frame_counter: 1,
-                        trees_over_time: vec![trees],
-                        burning_trees_over_time: vec![burning_trees],
-                        tree_ashes_over_time: vec![tree_ashes],
-                        grasses_over_time: vec![grasses],
-                        burning_grasses_over_time: vec![burning_grasses],
-                        grass_ashes_over_time: vec![grass_ashes],
                     });
                 }
             }
@@ -1274,6 +1275,75 @@ fn ui_system(
             }
         });
 
+    // Wind indicator
+    if params.is_wind_toggled {
+        egui::Area::new("wind_indicator")
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 20.0))
+            .show(ctx, |ui| {
+                let desired_size = egui::vec2(120.0, 140.0);
+                let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+                let painter = ui.painter();
+                let center = rect.center() - egui::vec2(0.0, 10.0);
+                let compass_radius = 50.0;
+                painter.circle_stroke(
+                    center,
+                    compass_radius,
+                    egui::Stroke::new(1.0, egui::Color32::GRAY),
+                );
+                painter.text(
+                    center + egui::vec2(0.0, -(compass_radius + 5.0)),
+                    egui::Align2::CENTER_CENTER,
+                    "N",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+                painter.text(
+                    center + egui::vec2(0.0, compass_radius + 5.0),
+                    egui::Align2::CENTER_CENTER,
+                    "S",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+                painter.text(
+                    center + egui::vec2(compass_radius + 5.0, 0.0),
+                    egui::Align2::CENTER_CENTER,
+                    "E",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+                painter.text(
+                    center + egui::vec2(-(compass_radius + 5.0), 0.0),
+                    egui::Align2::CENTER_CENTER,
+                    "W",
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+                let wind_goes_to_angle_rad = (params.wind_angle as f32).to_radians();
+                let dir_x = wind_goes_to_angle_rad.sin();
+                let dir_y = -wind_goes_to_angle_rad.cos();
+                let dir = egui::vec2(dir_x, dir_y);
+                let max_len = compass_radius - 5.0;
+                let min_len = 10.0;
+                let strength_ratio = (params.wind_strength.saturating_sub(1)) as f32 / 99.0;
+                let length = min_len + strength_ratio * (max_len - min_len);
+                let arrow_base = center - dir * length / 2.0;
+                let arrow_vec = dir * length;
+                painter.arrow(
+                    arrow_base,
+                    arrow_vec,
+                    egui::Stroke::new(3.0, egui::Color32::from_rgb(255, 100, 100)),
+                );
+                let strength_text = format!("{} km/h", params.wind_strength);
+                painter.text(
+                    rect.center() + egui::vec2(0.0, compass_radius + 5.0),
+                    egui::Align2::CENTER_CENTER,
+                    strength_text,
+                    egui::FontId::proportional(12.0),
+                    egui::Color32::LIGHT_GRAY,
+                );
+            });
+    }
+
     // Graphs
     if let Some(sim) = sim_ref {
         let available = stats.trees_over_time.len();
@@ -1304,11 +1374,11 @@ fn ui_system(
                 .resizable(false)
                 .show(ctx, |ui| {
                     let screen_height = ctx.screen_rect().height();
-                    let available_height = screen_height - 100.0; // adjust this value as needed
+                    let available_height = screen_height - 100.0;
 
-                    let num_plots = 5;
-                    let label_height = 20.0;
-                    let spacing = 6.0;
+                    let num_plots = 6;
+                    let label_height = 22.0;
+                    let spacing = 8.0;
                     let total_reserved = (label_height + spacing) * num_plots as f32;
                     let plot_height =
                         (available_height - total_reserved).max(40.0) / num_plots as f32;
@@ -1352,6 +1422,35 @@ fn ui_system(
                             ));
                         });
                     handle_plot_click(&tree_plot, &mut *playback, sim.frames.len());
+
+                    ui.separator();
+                    ui.label("Tree Growth Stages (%)");
+                    let growth_plot = Plot::new("TreeStages")
+                        .legend(Legend::default())
+                        .height(plot_height)
+                        .show(ui, |plot_ui| {
+                            plot_ui.line(plot_percent!(
+                                "Saplings %",
+                                stats.saplings_over_time,
+                                total_trees_over_time
+                            ));
+                            plot_ui.line(plot_percent!(
+                                "Burning Saplings %",
+                                stats.burning_saplings_over_time,
+                                total_trees_over_time
+                            ));
+                            plot_ui.line(plot_percent!(
+                                "Young Trees %",
+                                stats.young_trees_over_time,
+                                total_trees_over_time
+                            ));
+                            plot_ui.line(plot_percent!(
+                                "Burning Young Trees %",
+                                stats.burning_young_trees_over_time,
+                                total_trees_over_time
+                            ));
+                        });
+                    handle_plot_click(&growth_plot, &mut *playback, sim.frames.len());
 
                     ui.separator();
                     ui.label("Grass Status (%)");
@@ -1446,75 +1545,6 @@ fn ui_system(
                     handle_plot_click(&burned_area_plot, &mut *playback, sim.frames.len());
                 });
         }
-    }
-
-    // Wind indicator
-    if params.is_wind_toggled {
-        egui::Area::new("wind_indicator")
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-20.0, 20.0))
-            .show(ctx, |ui| {
-                let desired_size = egui::vec2(120.0, 140.0);
-                let (rect, _response) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
-                let painter = ui.painter();
-                let center = rect.center() - egui::vec2(0.0, 10.0);
-                let compass_radius = 50.0;
-                painter.circle_stroke(
-                    center,
-                    compass_radius,
-                    egui::Stroke::new(1.0, egui::Color32::GRAY),
-                );
-                painter.text(
-                    center + egui::vec2(0.0, -(compass_radius + 5.0)),
-                    egui::Align2::CENTER_CENTER,
-                    "N",
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::LIGHT_GRAY,
-                );
-                painter.text(
-                    center + egui::vec2(0.0, compass_radius + 5.0),
-                    egui::Align2::CENTER_CENTER,
-                    "S",
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::LIGHT_GRAY,
-                );
-                painter.text(
-                    center + egui::vec2(compass_radius + 5.0, 0.0),
-                    egui::Align2::CENTER_CENTER,
-                    "E",
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::LIGHT_GRAY,
-                );
-                painter.text(
-                    center + egui::vec2(-(compass_radius + 5.0), 0.0),
-                    egui::Align2::CENTER_CENTER,
-                    "W",
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::LIGHT_GRAY,
-                );
-                let wind_goes_to_angle_rad = (params.wind_angle as f32).to_radians();
-                let dir_x = wind_goes_to_angle_rad.sin();
-                let dir_y = -wind_goes_to_angle_rad.cos();
-                let dir = egui::vec2(dir_x, dir_y);
-                let max_len = compass_radius - 5.0;
-                let min_len = 10.0;
-                let strength_ratio = (params.wind_strength.saturating_sub(1)) as f32 / 99.0;
-                let length = min_len + strength_ratio * (max_len - min_len);
-                let arrow_base = center - dir * length / 2.0;
-                let arrow_vec = dir * length;
-                painter.arrow(
-                    arrow_base,
-                    arrow_vec,
-                    egui::Stroke::new(3.0, egui::Color32::from_rgb(255, 100, 100)),
-                );
-                let strength_text = format!("{} km/h", params.wind_strength);
-                painter.text(
-                    rect.center() + egui::vec2(0.0, compass_radius + 5.0),
-                    egui::Align2::CENTER_CENTER,
-                    strength_text,
-                    egui::FontId::proportional(12.0),
-                    egui::Color32::LIGHT_GRAY,
-                );
-            });
     }
 }
 
