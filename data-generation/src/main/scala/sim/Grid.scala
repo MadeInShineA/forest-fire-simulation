@@ -102,20 +102,25 @@ case class Grid(
     this.copy(cells = newCells)
   }
 
-  def strikeThunder(probability: Double = 0.1): Grid = {
+  def strikeThunder(percentage: Int): Grid = {
     val rand = new Random()
     val newCells = cells.zipWithIndex.map { case (row, y) =>
       row.zipWithIndex.map { case (cell, x) =>
         cell.cellType match {
-          case Tree if rand.nextDouble() < probability => Cell(Thunder)
-          case _                                       => cell
+          case Tree if rand.nextDouble() < percentage / 100.0 => Cell(Thunder)
+          case _                                              => cell
         }
       }
     }
     this.copy(cells = newCells)
   }
 
-  def nextStep(enableWind: Boolean, windAngle: Int, windStrength: Int): Grid = {
+  def nextStep(
+      thunderPercentage: Int,
+      enableWind: Boolean,
+      windAngle: Int,
+      windStrength: Int
+  ): Grid = {
     val rand = new Random()
 
     val windRad = math.toRadians(windAngle)
@@ -227,8 +232,7 @@ case class Grid(
 
     val updatedGrid = this.copy(cells = newCells)
 
-    // -------- 2. NOW STRIKE THUNDER (AFTER MAIN UPDATE) ----------
-    updatedGrid.strikeThunder(0.01)
+    updatedGrid.strikeThunder(thunderPercentage)
   }
 
   def getCell(x: Int, y: Int): Option[Cell] =

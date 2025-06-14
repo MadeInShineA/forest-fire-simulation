@@ -9,6 +9,7 @@ use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watche
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -83,6 +84,7 @@ struct SimulationParams {
     height: u32,
     burning_trees: u32,
     burning_grasses: u32,
+    thunder_percentage: u32,
     is_wind_toggled: bool,
     wind_angle: u32,
     wind_strength: u32,
@@ -621,18 +623,50 @@ fn start_simulation_button_system(
         params.height.to_string(),
         params.burning_trees.to_string(),
         params.burning_grasses.to_string(),
+        params.thunder_percentage.to_string(),
         (params.is_wind_toggled as i32).to_string(),
         params.wind_angle.to_string(),
         params.wind_strength.to_string(),
     ];
     let full_cmd = format!("sh run-sim-ndjson.sh {}", cmdline.join(" "));
     std::thread::spawn(move || {
-        let _ = Command::new("sh")
+        let mut child = Command::new("sh")
             .arg("-c")
             .arg(full_cmd)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn();
+
+        match child {
+            Ok(mut child_proc) => {
+                // stdout
+                if let Some(stdout) = child_proc.stdout.take() {
+                    std::thread::spawn(move || {
+                        let reader = BufReader::new(stdout);
+                        for line in reader.lines() {
+                            if let Ok(line) = line {
+                                eprintln!("scala : print {line}");
+                            }
+                        }
+                    });
+                }
+                // stderr
+                if let Some(stderr) = child_proc.stderr.take() {
+                    std::thread::spawn(move || {
+                        let reader = BufReader::new(stderr);
+                        for line in reader.lines() {
+                            if let Ok(line) = line {
+                                eprintln!("scala : error {line}");
+                            }
+                        }
+                    });
+                }
+                let _ = child_proc.wait();
+            }
+            Err(e) => {
+                eprintln!("scala : error (failed to spawn simulation process): {e}");
+            }
+        }
     });
 
     let (tx, rx) = unbounded::<SimulationFrameMsg>();
@@ -1182,6 +1216,10 @@ fn ui_system(
             ui.add(
                 egui::Slider::new(&mut params.burning_grasses, 0..=100).text("Burning grasses %"),
             );
+            ui.add(
+                egui::Slider::new(&mut params.thunder_percentage, 0..=100)
+                    .text("Thunder per step (%)"),
+            );
             ui.add(egui::Checkbox::new(
                 &mut params.is_wind_toggled,
                 "Enable wind",
@@ -1610,6 +1648,7 @@ fn main() {
             height: 20,
             burning_trees: 15,
             burning_grasses: 20,
+            thunder_percentage: 2,
             is_wind_toggled: false,
             wind_angle: 0,
             wind_strength: 1,

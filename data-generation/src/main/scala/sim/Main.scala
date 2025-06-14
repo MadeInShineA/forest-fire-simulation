@@ -7,15 +7,16 @@ import play.api.libs.json._
 import scala.io.Source
 
 object Main extends App {
-  val defaults = List(20, 20, 15, 20, 0, 0, 1)
+  val defaults = List(20, 20, 2, 15, 20, 0, 0, 1)
   val parsedArgs = args.dropWhile(_ == "--").map(_.toIntOption).toList
   val finalArgs =
-    (parsedArgs ++ defaults.map(Some(_))).take(7).map(_.getOrElse(0))
+    (parsedArgs ++ defaults.map(Some(_))).take(8).map(_.getOrElse(0))
   val List(
     width,
     height,
     fireTree,
     fireGrass,
+    thunderPercentage,
     windEnabled,
     windAngle,
     windStrength
@@ -66,7 +67,8 @@ object Main extends App {
     val doStep = step && !lastStepSeen
 
     if (!paused || doStep) {
-      val nextGrid = grid.nextStep(windEnabled, windAngle, windStrength)
+      val nextGrid =
+        grid.nextStep(thunderPercentage, windEnabled, windAngle, windStrength)
       writeFrame(out, nextGrid)
 
       if (doStep) {
