@@ -127,29 +127,20 @@ struct SimulationStats {
     burning_young_trees_over_time: Vec<i64>,
 }
 impl SimulationStats {
-    fn new(total_frames: usize, initial_stats: Option<(i64, i64, i64, i64, i64, i64)>) -> Self {
-        let mut stats = Self {
+    fn new_empty() -> Self {
+        Self {
             frame_counter: 0,
-            trees_over_time: vec![0; total_frames],
-            burning_trees_over_time: vec![0; total_frames],
-            tree_ashes_over_time: vec![0; total_frames],
-            grasses_over_time: vec![0; total_frames],
-            burning_grasses_over_time: vec![0; total_frames],
-            grass_ashes_over_time: vec![0; total_frames],
-            saplings_over_time: vec![0; total_frames],
-            burning_saplings_over_time: vec![0; total_frames],
-            young_trees_over_time: vec![0; total_frames],
-            burning_young_trees_over_time: vec![0; total_frames],
-        };
-        if let Some((t, bt, ta, g, bg, ga)) = initial_stats {
-            stats.trees_over_time[0] = t;
-            stats.burning_trees_over_time[0] = bt;
-            stats.tree_ashes_over_time[0] = ta;
-            stats.grasses_over_time[0] = g;
-            stats.burning_grasses_over_time[0] = bg;
-            stats.grass_ashes_over_time[0] = ga;
+            trees_over_time: vec![],
+            burning_trees_over_time: vec![],
+            tree_ashes_over_time: vec![],
+            grasses_over_time: vec![],
+            burning_grasses_over_time: vec![],
+            grass_ashes_over_time: vec![],
+            saplings_over_time: vec![],
+            burning_saplings_over_time: vec![],
+            young_trees_over_time: vec![],
+            burning_young_trees_over_time: vec![],
         }
-        stats
     }
 }
 
@@ -649,7 +640,7 @@ fn start_simulation_button_system(
     commands.insert_resource(FsWatcher(watcher));
 
     commands.remove_resource::<Simulation>();
-    commands.insert_resource(SimulationStats::new(1, None));
+    commands.insert_resource(SimulationStats::new_empty());
 
     update_sim_control(SimControl {
         paused: Some(false),
@@ -672,6 +663,19 @@ fn simulation_update_system(
     while let Ok(msg) = ndjson.0.try_recv() {
         match msg {
             SimulationFrameMsg::Metadata { width, height } => {
+                *stats = SimulationStats {
+                    frame_counter: 0,
+                    trees_over_time: vec![],
+                    burning_trees_over_time: vec![],
+                    tree_ashes_over_time: vec![],
+                    grasses_over_time: vec![],
+                    burning_grasses_over_time: vec![],
+                    grass_ashes_over_time: vec![],
+                    saplings_over_time: vec![],
+                    burning_saplings_over_time: vec![],
+                    young_trees_over_time: vec![],
+                    burning_young_trees_over_time: vec![],
+                };
                 commands.insert_resource(Simulation {
                     frames: Vec::new(),
                     current: 0,
@@ -683,86 +687,52 @@ fn simulation_update_system(
                 *has_started = true;
             }
             SimulationFrameMsg::Frame(frame) => {
+                // Always push stats for every frame
+                let mut trees = 0;
+                let mut burning_trees = 0;
+                let mut tree_ashes = 0;
+                let mut grasses = 0;
+                let mut burning_grasses = 0;
+                let mut grass_ashes = 0;
+                let mut saplings = 0;
+                let mut burning_saplings = 0;
+                let mut young_trees = 0;
+                let mut burning_young_trees = 0;
+
+                for row in &frame {
+                    for cell in row {
+                        match cell.as_str() {
+                            "T" => trees += 1,
+                            "*" | "**" | "***" => burning_trees += 1,
+                            "s" => saplings += 1,
+                            "!" => burning_saplings += 1,
+                            "y" => young_trees += 1,
+                            "&" | "@" => burning_young_trees += 1,
+                            "A" => tree_ashes += 1,
+                            "G" => grasses += 1,
+                            "+" => burning_grasses += 1,
+                            "-" => grass_ashes += 1,
+                            _ => {}
+                        }
+                    }
+                }
+                stats.trees_over_time.push(trees);
+                stats.burning_trees_over_time.push(burning_trees);
+                stats.tree_ashes_over_time.push(tree_ashes);
+                stats.grasses_over_time.push(grasses);
+                stats.burning_grasses_over_time.push(burning_grasses);
+                stats.grass_ashes_over_time.push(grass_ashes);
+                stats.saplings_over_time.push(saplings);
+                stats.burning_saplings_over_time.push(burning_saplings);
+                stats.young_trees_over_time.push(young_trees);
+                stats
+                    .burning_young_trees_over_time
+                    .push(burning_young_trees);
+
+                // Simulation resource
                 if let Some(ref mut sim) = sim {
-                    let is_first_frame = sim.frames.is_empty();
                     sim.frames.push(frame.clone());
-
-                    let mut trees = 0;
-                    let mut burning_trees = 0;
-                    let mut tree_ashes = 0;
-                    let mut grasses = 0;
-                    let mut burning_grasses = 0;
-                    let mut grass_ashes = 0;
-                    let mut saplings = 0;
-                    let mut burning_saplings = 0;
-                    let mut young_trees = 0;
-                    let mut burning_young_trees = 0;
-
-                    for row in &frame {
-                        for cell in row {
-                            match cell.as_str() {
-                                "T" => trees += 1,
-                                "*" | "**" | "***" => burning_trees += 1,
-                                "s" => saplings += 1,
-                                "!" => burning_saplings += 1,
-                                "y" => young_trees += 1,
-                                "&" | "@" => burning_young_trees += 1,
-                                "A" => tree_ashes += 1,
-                                "G" => grasses += 1,
-                                "+" => burning_grasses += 1,
-                                "-" => grass_ashes += 1,
-                                _ => {}
-                            }
-                        }
-                    }
-
-                    if is_first_frame {
-                        commands.insert_resource(SimulationStats {
-                            frame_counter: 1,
-                            trees_over_time: vec![trees],
-                            burning_trees_over_time: vec![burning_trees],
-                            tree_ashes_over_time: vec![tree_ashes],
-                            grasses_over_time: vec![grasses],
-                            burning_grasses_over_time: vec![burning_grasses],
-                            grass_ashes_over_time: vec![grass_ashes],
-                            saplings_over_time: vec![saplings],
-                            burning_saplings_over_time: vec![burning_saplings],
-                            young_trees_over_time: vec![young_trees],
-                            burning_young_trees_over_time: vec![burning_young_trees],
-                        });
-                    } else {
-                        let frame_index = sim.frames.len() - 1;
-                        macro_rules! ensure_push {
-                            ($vec:expr, $val:expr) => {
-                                if $vec.len() <= frame_index {
-                                    $vec.push($val);
-                                } else {
-                                    $vec[frame_index] = $val;
-                                }
-                            };
-                        }
-                        ensure_push!(stats.trees_over_time, trees);
-                        ensure_push!(stats.burning_trees_over_time, burning_trees);
-                        ensure_push!(stats.tree_ashes_over_time, tree_ashes);
-                        ensure_push!(stats.grasses_over_time, grasses);
-                        ensure_push!(stats.burning_grasses_over_time, burning_grasses);
-                        ensure_push!(stats.grass_ashes_over_time, grass_ashes);
-                        ensure_push!(stats.saplings_over_time, saplings);
-                        ensure_push!(stats.burning_saplings_over_time, burning_saplings);
-                        ensure_push!(stats.young_trees_over_time, young_trees);
-                        ensure_push!(stats.burning_young_trees_over_time, burning_young_trees);
-
-                        stats.frame_counter = sim.frames.len();
-                    }
-
-                    if sim.frames.len() >= 1 && loading.0 {
-                        loading.0 = false;
-                        playback.paused = true;
-                        playback.jump_to_frame = Some(0);
-                        spawn_scene(&mut commands);
-                    }
                 } else if *has_started {
-                    // fallback if sim is not yet available
                     let width = frame[0].len();
                     let height = frame.len();
                     commands.insert_resource(Simulation {
@@ -771,6 +741,17 @@ fn simulation_update_system(
                         width,
                         height,
                     });
+                }
+
+                stats.frame_counter = stats.trees_over_time.len();
+
+                if let Some(ref sim) = sim {
+                    if sim.frames.len() >= 1 && loading.0 {
+                        loading.0 = false;
+                        playback.paused = true;
+                        playback.jump_to_frame = Some(0);
+                        spawn_scene(&mut commands);
+                    }
                 }
             }
             SimulationFrameMsg::SimulationEnded => {}
@@ -1613,7 +1594,7 @@ fn main() {
             wind_strength: 1,
             trigger_simulation: false,
         })
-        .insert_resource(SimulationStats::new(1, None))
+        .insert_resource(SimulationStats::new_empty())
         .insert_resource(ShowGraphs(false))
         .insert_resource(NdjsonChannel(rx))
         .insert_resource(NdjsonTailingHandle(None))
