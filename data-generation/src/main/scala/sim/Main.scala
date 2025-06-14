@@ -1,7 +1,7 @@
 package sim
 
 import JsonFormats._
-import scala.util.{Random, Using, Try}
+import scala.util.{Try, Using}
 import java.io.{FileWriter, PrintWriter}
 import play.api.libs.json._
 import scala.io.Source
@@ -14,9 +14,9 @@ object Main extends App {
   val List(
     width,
     height,
+    thunderPercentage, // <-- thunder is third
     fireTree,
     fireGrass,
-    thunderPercentage,
     windEnabled,
     windAngle,
     windStrength
@@ -29,14 +29,17 @@ object Main extends App {
       out.println(Json.stringify(Json.toJson(grid.encodeCells)))
     }
 
+  // Tuple is: (thunder, windAngle, windStrength, windEnabled)
   def loadControlState(
-      defaults: (Int, Int, Boolean)
-  ): (Int, Int, Boolean, Boolean, Boolean) = {
-    val (defaultAngle, defaultStrength, defaultEnabled) = defaults
+      defaults: (Int, Int, Int, Boolean)
+  ): (Int, Int, Int, Boolean, Boolean, Boolean) = {
+    val (defaultThunder, defaultAngle, defaultStrength, defaultEnabled) =
+      defaults
     val controlJson = Try(
       Json.parse(Source.fromFile("assets/sim_control.json").mkString)
     ).getOrElse(Json.obj())
     (
+      (controlJson \ "thunderPercentage").asOpt[Int].getOrElse(defaultThunder),
       (controlJson \ "windAngle").asOpt[Int].getOrElse(defaultAngle),
       (controlJson \ "windStrength").asOpt[Int].getOrElse(defaultStrength),
       (controlJson \ "windEnabled").asOpt[Boolean].getOrElse(defaultEnabled),
@@ -59,16 +62,15 @@ object Main extends App {
       grid: Grid,
       out: FileWriter,
       lastStepSeen: Boolean,
-      defaultWind: (Int, Int, Boolean)
+      defaultControl: (Int, Int, Int, Boolean)
   ): Unit = {
-    val (windAngle, windStrength, windEnabled, paused, step) = loadControlState(
-      defaultWind
-    )
+    val (thunderPct, windAngle, windStrength, windEnabled, paused, step) =
+      loadControlState(defaultControl)
     val doStep = step && !lastStepSeen
 
     if (!paused || doStep) {
       val nextGrid =
-        grid.nextStep(thunderPercentage, windEnabled, windAngle, windStrength)
+        grid.nextStep(thunderPct, windEnabled, windAngle, windStrength)
       writeFrame(out, nextGrid)
 
       if (doStep) {
@@ -82,10 +84,10 @@ object Main extends App {
         }
       }
       Thread.sleep(100)
-      loop(nextGrid, out, step, defaultWind)
+      loop(nextGrid, out, step, defaultControl)
     } else {
       Thread.sleep(20)
-      loop(grid, out, lastStepSeen, defaultWind)
+      loop(grid, out, lastStepSeen, defaultControl)
     }
   }
 
@@ -99,7 +101,12 @@ object Main extends App {
         initialGrid,
         out,
         lastStepSeen = false,
-        (windAngle, windStrength, windEnabled == 1)
+        (
+          thunderPercentage, // Int
+          windAngle, // Int
+          windStrength, // Int
+          windEnabled == 1 // Boolean
+        )
       )
   }
 }

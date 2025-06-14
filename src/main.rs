@@ -93,6 +93,8 @@ struct SimulationParams {
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone)]
 pub struct SimControl {
+    #[serde(rename = "thunderPercentage")]
+    pub thunder_percentage: Option<u32>,
     #[serde(rename = "windAngle")]
     pub wind_angle: Option<i32>,
     #[serde(rename = "windStrength")]
@@ -192,6 +194,9 @@ fn read_sim_control() -> SimControl {
 }
 fn update_sim_control(update: SimControl) {
     let mut control = read_sim_control();
+    if let Some(val) = update.thunder_percentage {
+        control.thunder_percentage = Some(val);
+    }
     if let Some(val) = update.wind_angle {
         control.wind_angle = Some(val);
     }
@@ -680,6 +685,7 @@ fn start_simulation_button_system(
 
     update_sim_control(SimControl {
         paused: Some(false),
+        thunder_percentage: Some(params.thunder_percentage),
         wind_enabled: Some(params.is_wind_toggled),
         wind_angle: Some(params.wind_angle as i32),
         wind_strength: Some(params.wind_strength as i32),
@@ -1235,6 +1241,13 @@ fn ui_system(
                 if ui.button("Start Simulation").clicked() {
                     params.trigger_simulation = true;
                 }
+                if sim_ref.is_some() && ui.button("Update Thunder").clicked() {
+                    update_sim_control(SimControl {
+                        thunder_percentage: Some(params.thunder_percentage),
+                        ..Default::default()
+                    });
+                }
+
                 if sim_ref.is_some() && ui.button("Update Wind").clicked() {
                     update_sim_control(SimControl {
                         wind_angle: Some(params.wind_angle as i32),
