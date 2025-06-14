@@ -301,9 +301,30 @@ fn setup_assets(
         "burnt_grass",
         meshes.add(Mesh::from(Cylinder::new(5.0, 0.2))),
     );
+
+    // Burning tree leaves stages
     mesh_map.insert("burning_leaves1", mesh_map["leaves"].clone());
     mesh_map.insert("burning_leaves2", mesh_map["leaves"].clone());
     mesh_map.insert("burning_leaves3", mesh_map["leaves"].clone());
+
+    // Sapling and young tree
+    mesh_map.insert("sapling", meshes.add(Mesh::from(Cylinder::new(0.5, 1.5))));
+    mesh_map.insert(
+        "young_tree",
+        meshes.add(Mesh::from(Cylinder::new(0.8, 3.0))),
+    );
+    mesh_map.insert(
+        "burning_sapling",
+        meshes.add(Mesh::from(Cylinder::new(0.5, 1.5))),
+    );
+    mesh_map.insert(
+        "burning_young_tree",
+        meshes.add(Mesh::from(Cylinder::new(0.8, 3.0))),
+    );
+
+    // New foliage meshes
+    mesh_map.insert("foliage_small", meshes.add(Mesh::from(Sphere::new(1.0))));
+    mesh_map.insert("foliage_medium", meshes.add(Mesh::from(Sphere::new(2.5))));
 
     let mut mat_map = HashMap::new();
     mat_map.insert(
@@ -382,6 +403,60 @@ fn setup_assets(
             ..default()
         }),
     );
+    mat_map.insert(
+        "sapling",
+        materials.add(StandardMaterial {
+            base_color: Color::rgb(0.4, 0.6, 0.3),
+            ..default()
+        }),
+    );
+    mat_map.insert(
+        "young_tree",
+        materials.add(StandardMaterial {
+            base_color: Color::rgb(0.2, 0.5, 0.2),
+            ..default()
+        }),
+    );
+    mat_map.insert(
+        "burning_sapling",
+        materials.add(StandardMaterial {
+            base_color: Color::rgb(1.0, 0.5, 0.2),
+            emissive: Color::rgb(2.0, 1.0, 0.3),
+            ..default()
+        }),
+    );
+    mat_map.insert(
+        "burning_young_tree1",
+        materials.add(StandardMaterial {
+            base_color: Color::rgb(0.9, 0.3, 0.1),
+            emissive: Color::rgb(2.5, 1.0, 0.3),
+            ..default()
+        }),
+    );
+    mat_map.insert(
+        "burning_young_tree2",
+        materials.add(StandardMaterial {
+            base_color: Color::rgb(0.5, 0.15, 0.05),
+            emissive: Color::rgb(1.5, 0.4, 0.2),
+            ..default()
+        }),
+    );
+
+    // Foliage materials
+    mat_map.insert(
+        "foliage_small",
+        materials.add(StandardMaterial {
+            base_color: Color::rgb(0.3, 0.7, 0.3),
+            ..default()
+        }),
+    );
+    mat_map.insert(
+        "foliage_medium",
+        materials.add(StandardMaterial {
+            base_color: Color::rgb(0.1, 0.6, 0.1),
+            ..default()
+        }),
+    );
 
     commands.insert_resource(CachedAssets {
         meshes: mesh_map,
@@ -401,10 +476,12 @@ fn kind_from_str(cell: &str) -> &'static str {
         "*" => "burning_leaves1",
         "**" => "burning_leaves2",
         "***" => "burning_leaves3",
-        other => panic!(
-            "Unknown cell type encountered in kind_from_str: '{}'",
-            other
-        ),
+        "s" => "sapling",
+        "y" => "young_tree",
+        "!" => "burning_sapling",
+        "&" => "burning_young_tree1",
+        "@" => "burning_young_tree2",
+        other => panic!("Unknown cell type in kind_from_str: '{other}'"),
     }
 }
 fn spawn_cell(commands: &mut Commands, cache: &CachedAssets, kind: &str, pos: Vec3) {
@@ -620,8 +697,8 @@ fn simulation_update_system(
                     for row in &frame {
                         for cell in row {
                             match cell.as_str() {
-                                "T" => trees += 1,
-                                "*" | "**" | "***" => burning_trees += 1,
+                                "T" | "y" | "s" => trees += 1,
+                                "*" | "**" | "***" | "!" | "&" | "@" => burning_trees += 1,
                                 "A" => tree_ashes += 1,
                                 "G" => grasses += 1,
                                 "+" => burning_grasses += 1,
@@ -663,11 +740,13 @@ fn advance_frame_system(
     if sim.frames.is_empty() {
         return;
     }
+
     if timer.0.duration().as_secs_f32() != playback.speed {
         timer
             .0
             .set_duration(Duration::from_secs_f32(playback.speed));
     }
+
     if playback.paused
         && !playback.step_forward
         && !playback.step_back
@@ -675,13 +754,16 @@ fn advance_frame_system(
     {
         return;
     }
+
     let ticked = timer.0.tick(time.delta()).just_finished();
     if !ticked && playback.jump_to_frame.is_none() && !playback.step_forward && !playback.step_back
     {
         return;
     }
+
     let last = sim.frames.len().saturating_sub(1);
     let mut next = sim.current;
+
     if let Some(jump) = playback.jump_to_frame.take() {
         next = jump.min(last);
     } else if playback.step_back {
@@ -699,15 +781,13 @@ fn advance_frame_system(
             next += 1;
         }
     }
+
     sim.current = next;
-    eprintln!(
-        "Displaying frame index: {} {:?}",
-        sim.current, sim.frames[sim.current][0]
-    );
 
     for ent in cells.iter() {
         commands.entity(ent).despawn_recursive();
     }
+
     let grid = &sim.frames[sim.current];
     let cell_size = 10.0;
     let spacing = 1.5;
@@ -715,6 +795,7 @@ fn advance_frame_system(
     let offset_z = -(sim.height as f32 * cell_size * spacing) / 2.0;
     let height = grid.len();
     let width = grid[0].len();
+
     for (iy, row) in grid.iter().enumerate() {
         for (ix, cell) in row.iter().enumerate() {
             let pos = Vec3::new(
@@ -735,6 +816,32 @@ fn advance_frame_system(
                             _ => "leaves",
                         },
                         pos + Vec3::Y * 7.0,
+                    );
+                }
+                "s" => {
+                    // Sapling trunk + foliage
+                    spawn_cell(&mut commands, &cache, "sapling", pos + Vec3::Y * 0.75);
+                    spawn_cell(&mut commands, &cache, "foliage_small", pos + Vec3::Y * 1.6);
+                }
+                "y" => {
+                    // Young tree trunk + foliage
+                    spawn_cell(&mut commands, &cache, "young_tree", pos + Vec3::Y * 1.5);
+                    spawn_cell(&mut commands, &cache, "foliage_medium", pos + Vec3::Y * 4.2);
+                }
+                "!" => {
+                    spawn_cell(
+                        &mut commands,
+                        &cache,
+                        "burning_sapling",
+                        pos + Vec3::Y * 0.75,
+                    );
+                }
+                "&" | "@" => {
+                    spawn_cell(
+                        &mut commands,
+                        &cache,
+                        "burning_young_tree",
+                        pos + Vec3::Y * 1.5,
                     );
                 }
                 other => {
