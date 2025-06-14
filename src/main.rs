@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{
@@ -20,7 +21,44 @@ use std::{
     thread,
 };
 
+use sysinfo::{ProcessRefreshKind, RefreshKind, Signal, System};
+
 //──────────────────── Resources & Data Types ──────────────────────//
+
+fn kill_simulation_processes() {
+    let mut sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+    );
+    sys.refresh_processes();
+
+    let mut killed_any = false;
+    for process in sys.processes().values() {
+        let cmdline = process.cmd().join(" ");
+        let exe = process
+            .exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        let matches = (exe.contains("java") || cmdline.contains("java"))
+            && (cmdline.contains("data-generation") && cmdline.contains(".jar"));
+        if matches {
+            println!("Killing process {}: {}", process.pid(), cmdline);
+            let _ = process.kill_with(Signal::Kill);
+            killed_any = true;
+        }
+    }
+    if killed_any {
+        println!("All simulation processes killed.");
+    }
+}
+
+// Kills on drop for normal exit
+struct KillOnDrop;
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        eprintln!("Exiting (Drop): Killing simulation processes...");
+        kill_simulation_processes();
+    }
+}
 
 #[derive(Resource)]
 struct FsWatcher(pub notify::RecommendedWatcher);
@@ -1320,6 +1358,43 @@ fn ui_system(
 //──────────────────── App Entrypoint ──────────────────────//
 
 fn main() {
+    use bevy::prelude::*;
+    use crossbeam_channel::unbounded;
+    use std::sync::Mutex;
+    // (Insert other necessary use/imports here!)
+
+    // Prevent double cleanup
+    let cleaned_up = Arc::new(AtomicBool::new(false));
+
+    // ---- PANIC hook ----
+    {
+        let cleaned_up = cleaned_up.clone();
+        std::panic::set_hook(Box::new(move |info| {
+            if !cleaned_up.swap(true, Ordering::SeqCst) {
+                eprintln!("PANIC: Killing simulation processes...");
+                kill_simulation_processes();
+            }
+            eprintln!("Process killed. Info: {info}");
+        }));
+    }
+
+    // ---- SIGINT/Ctrl+C ----
+    {
+        let cleaned_up = cleaned_up.clone();
+        ctrlc::set_handler(move || {
+            if !cleaned_up.swap(true, Ordering::SeqCst) {
+                eprintln!("SIGINT: Killing simulation processes...");
+                kill_simulation_processes();
+            }
+            std::process::exit(2);
+        })
+        .expect("Error setting Ctrl+C handler");
+    }
+
+    // ---- Drop guard for normal exit ----
+    let _guard = KillOnDrop;
+
+    // ---- Your Bevy/Egui App Starts Here ----
     let kill_switch = Arc::new(Mutex::new(false));
     let (_tx, rx) = unbounded::<SimulationFrameMsg>();
 
@@ -1333,7 +1408,7 @@ fn main() {
         })
         .insert_resource(PlaybackControl {
             speed: 0.4,
-            ..default()
+            ..Default::default()
         })
         .insert_resource(SimulationParams {
             width: 20,
@@ -1356,9 +1431,9 @@ fn main() {
                 resolution: (1280., 800.).into(),
                 resizable: false,
                 mode: bevy::window::WindowMode::Fullscreen,
-                ..default()
+                ..Default::default()
             }),
-            ..default()
+            ..Default::default()
         }))
         .add_plugins(EguiPlugin)
         .add_systems(Startup, setup_assets)
@@ -1371,6 +1446,7 @@ fn main() {
                 camera_movement_system,
                 space_pause_resume_system,
                 start_simulation_button_system,
+                // any other systems you want!
             ),
         )
         .run();
