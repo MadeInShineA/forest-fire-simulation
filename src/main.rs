@@ -1233,8 +1233,7 @@ fn ui_system(
             if params.is_wind_toggled {
                 ui.add(egui::Slider::new(&mut params.wind_angle, 0..=359).text("Wind angle °"));
                 ui.add(
-                    egui::Slider::new(&mut params.wind_strength, 1..=100)
-                        .text("Wind strength km/h"),
+                    egui::Slider::new(&mut params.wind_strength, 1..=50).text("Wind strength km/h"),
                 );
             }
             ui.horizontal(|ui| {
@@ -1659,9 +1658,9 @@ fn main() {
         .insert_resource(SimulationParams {
             width: 20,
             height: 20,
-            burning_trees: 15,
-            burning_grasses: 20,
-            thunder_percentage: 2,
+            burning_trees: 5,
+            burning_grasses: 10,
+            thunder_percentage: 0,
             is_wind_toggled: false,
             wind_angle: 0,
             wind_strength: 1,

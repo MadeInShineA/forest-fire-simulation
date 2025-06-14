@@ -7,6 +7,8 @@ import play.api.libs.json._
 import scala.io.Source
 
 object Main extends App {
+  val RUN_FAST = false
+
   val defaults = List(20, 20, 2, 15, 20, 0, 0, 1)
   val parsedArgs = args.dropWhile(_ == "--").map(_.toIntOption).toList
   val finalArgs =
@@ -87,10 +89,12 @@ object Main extends App {
           case _ => ()
         }
       }
-      // Thread.sleep(100)
+
+      if (!RUN_FAST) Thread.sleep(100)
       loop(nextGrid, out, step, defaultControl)
     } else {
-      // Thread.sleep(20)
+
+      if (!RUN_FAST) Thread.sleep(20)
       loop(grid, out, lastStepSeen, defaultControl)
     }
   }
@@ -99,7 +103,7 @@ object Main extends App {
     Grid(width, height, rand).igniteRandomFires(fireTree, fireGrass)
   writeInitialFiles(initialGrid)
 
-  // Thread.sleep(100)
+  if (!RUN_FAST) Thread.sleep(100)
   Using.resource(new FileWriter("assets/simulation_stream.ndjson", true)) {
     out =>
       loop(

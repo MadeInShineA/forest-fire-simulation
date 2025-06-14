@@ -10,9 +10,9 @@ PARENT_DIR = os.path.abspath("..")
 SIM_SCRIPT = "./run-sim-ndjson.sh"
 SIM_FILE = os.path.join(PARENT_DIR, "assets/simulation_stream.ndjson")
 SIM_CONTROL = os.path.join(PARENT_DIR, "assets/sim_control.json")
-MAX_WIND_STRENGTH = 100
+MAX_WIND_STRENGTH = 50
 REPEATS = 5
-WIND_STRENGTH_STEP = 5
+WIND_STRENGTH_STEP = 1
 
 GRID_WIDTH = 100
 GRID_HEIGHT = 100

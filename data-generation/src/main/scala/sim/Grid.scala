@@ -52,20 +52,44 @@ case class Grid(
     height: Int,
     cells: Vector[Vector[Cell]],
     rand: Random,
-    ashRegrowSteps: Int = 60,
-    burnedGrassRegrowSteps: Int = 15,
-    saplingGrowSteps: Int = 12,
-    youngTreeGrowSteps: Int = 15,
-    treeIgniteProb: Double = 0.017,
-    grassIgniteProb: Double = 0.07,
-    windSteepness: Double = 0.18,
-    windMidpoint: Double = 45.0,
-    windMaxMult: Double = 20.0,
-    fireJumpBaseChance: Double = 0.005,
-    fireJumpDistFactor: Double = 3.0,
-    fireJumpMaxMult: Double = 28.0,
-    ashToTreeProb: Double = 0.05,
-    burnedGrassToGrassProb: Double = 0.7
+
+    // --- REGROWTH TIMING PARAMETERS (in days) ---
+    ashRegrowSteps: Int =
+      300, // Days before regrowth can start on ash (≈ 10 months)
+    burnedGrassRegrowSteps: Int =
+      15, // Days before burned grass can recover (≈ 2 weeks)
+    saplingGrowSteps: Int =
+      60, // Days for sapling to become a young tree (≈ 2 months)
+    youngTreeGrowSteps: Int =
+      180, // Days for young tree to become mature (≈ 6 months)
+
+    // --- IGNITION PROBABILITIES (per burning neighbor, per day) ---
+    treeIgniteProb: Double =
+      0.02, // Probability a tree ignites from a burning neighbor each day (2%)
+    grassIgniteProb: Double =
+      0.08, // Probability grass ignites from a burning neighbor each day (8%)
+
+    // --- WIND EFFECT PARAMETERS ---
+    windSteepness: Double =
+      0.4, // Controls sharpness of wind effect (higher = more abrupt transition)
+    windMidpoint: Double =
+      20.0, // Wind speed (km/h) at which fire spread sharply increases ("critical wind")
+    windMaxMult: Double =
+      7.0, // Maximum fire spread multiplier at highest wind (e.g. 7× at 50 km/h)
+
+    // --- FIRE JUMP ("SPOTTING") PARAMETERS ---
+    fireJumpBaseChance: Double =
+      0.002, // Base daily probability of fire "jumping" (spotting) to distant cells (0.2%)
+    fireJumpDistFactor: Double =
+      3.0, // Distance divisor for spotting chance (higher = less likely at distance)
+    fireJumpMaxMult: Double =
+      5.0, // Max wind multiplier for spotting chance (should match windMaxMult)
+
+    // --- POST-FIRE REGENERATION PROBABILITIES (per day) ---
+    ashToTreeProb: Double =
+      0.03, // Probability ash regrows as sapling (per day, after regrow delay)
+    burnedGrassToGrassProb: Double =
+      0.4 // Probability burned grass regrows as grass (per day, after regrow delay)
 ) {
   private val neighborDirs = List(
     (-1, -1),
