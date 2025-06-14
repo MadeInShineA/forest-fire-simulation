@@ -118,10 +118,6 @@ case class Grid(
   def nextStep(enableWind: Boolean, windAngle: Int, windStrength: Int): Grid = {
     val rand = new Random()
 
-    // ⚡ Add thunder strikes before proceeding with the simulation step
-    val thunderedGrid =
-      this.strikeThunder(0.01) // adjust the probability as desired
-
     val windRad = math.toRadians(windAngle)
     val windVec = (math.sin(windRad), -math.cos(windRad))
 
@@ -150,12 +146,13 @@ case class Grid(
       (1, 1)
     )
 
+    // -------- 1. MAIN UPDATE PHASE (NO THUNDER YET) ----------
     val newCells = Vector.tabulate(height, width) { (y, x) =>
-      val Cell(ct, grow) = thunderedGrid.cells(y)(x)
+      val Cell(ct, grow) = cells(y)(x)
       ct match {
         case Tree =>
           val ignites = neighborDirs.exists { case (dx, dy) =>
-            thunderedGrid.getCell(x + dx, y + dy).exists {
+            getCell(x + dx, y + dy).exists {
               case Cell(burnCt, _) if isBurning(burnCt) =>
                 rand.nextDouble() < treeIgniteProb * windBoost(dx, dy)
               case _ => false
@@ -165,7 +162,7 @@ case class Grid(
 
         case Sapling =>
           val ignites = neighborDirs.exists { case (dx, dy) =>
-            thunderedGrid.getCell(x + dx, y + dy).exists {
+            getCell(x + dx, y + dy).exists {
               case Cell(burnCt, _) if isBurning(burnCt) =>
                 rand.nextDouble() < treeIgniteProb * windBoost(dx, dy) * 1.2
               case _ => false
@@ -177,7 +174,7 @@ case class Grid(
 
         case YoungTree =>
           val ignites = neighborDirs.exists { case (dx, dy) =>
-            thunderedGrid.getCell(x + dx, y + dy).exists {
+            getCell(x + dx, y + dy).exists {
               case Cell(burnCt, _) if isBurning(burnCt) =>
                 rand.nextDouble() < treeIgniteProb * windBoost(dx, dy) * 1.1
               case _ => false
@@ -189,7 +186,7 @@ case class Grid(
 
         case Grass =>
           val ignites = neighborDirs.exists { case (dx, dy) =>
-            thunderedGrid.getCell(x + dx, y + dy).exists {
+            getCell(x + dx, y + dy).exists {
               case Cell(burnCt, _) if isBurning(burnCt) =>
                 rand.nextDouble() < grassIgniteProb * windBoost(dx, dy)
               case _ => false
@@ -209,7 +206,7 @@ case class Grid(
         case Ash(deadSteps) =>
           if (
             deadSteps >= ashRegrowSteps - 1 &&
-            thunderedGrid.hasLivingOrWaterNeighbor(x, y)
+            hasLivingOrWaterNeighbor(x, y)
           ) {
             if (rand.nextDouble() < ashToTreeProb) Cell(Sapling)
             else Cell(Grass)
@@ -218,17 +215,20 @@ case class Grid(
         case BurnedGrass(deadSteps) =>
           if (
             deadSteps >= burnedGrassRegrowSteps - 1 &&
-            thunderedGrid.hasLivingOrWaterNeighbor(x, y)
+            hasLivingOrWaterNeighbor(x, y)
           ) {
             if (rand.nextDouble() < burnedGrassToGrassProb) Cell(Grass)
             else Cell(Sapling)
           } else Cell(BurnedGrass(deadSteps + 1))
 
-        case _ => thunderedGrid.cells(y)(x)
+        case _ => cells(y)(x)
       }
     }
 
-    this.copy(cells = newCells)
+    val updatedGrid = this.copy(cells = newCells)
+
+    // -------- 2. NOW STRIKE THUNDER (AFTER MAIN UPDATE) ----------
+    updatedGrid.strikeThunder(0.01)
   }
 
   def getCell(x: Int, y: Int): Option[Cell] =
