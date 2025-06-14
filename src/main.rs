@@ -992,8 +992,19 @@ fn ui_system(
         if show_graphs_resource.0 {
             egui::Window::new("Simulation Graphs")
                 .default_width(550.0)
-                .default_height(700.0)
+                .default_height(600.0)
+                .resizable(false)
                 .show(ctx, |ui| {
+                    let screen_height = ctx.screen_rect().height();
+                    let available_height = screen_height - 100.0; // adjust this value as needed
+
+                    let num_plots = 5;
+                    let label_height = 20.0;
+                    let spacing = 6.0;
+                    let total_reserved = (label_height + spacing) * num_plots as f32;
+                    let plot_height =
+                        (available_height - total_reserved).max(40.0) / num_plots as f32;
+
                     macro_rules! plot_percent {
                         ($name:expr, $v:expr, $total:expr) => {{
                             let points: PlotPoints = (0..=last_index)
@@ -1010,11 +1021,11 @@ fn ui_system(
                             Line::new(points).name($name)
                         }};
                     }
-                    // Trees Plot
+
                     ui.label("Tree Status (%)");
                     let tree_plot = Plot::new("Trees")
                         .legend(Legend::default())
-                        .height(120.0)
+                        .height(plot_height)
                         .show(ui, |plot_ui| {
                             plot_ui.line(plot_percent!(
                                 "Trees %",
@@ -1034,11 +1045,11 @@ fn ui_system(
                         });
                     handle_plot_click(&tree_plot, &mut *playback, sim.frames.len());
 
-                    // Grasses Plot
+                    ui.separator();
                     ui.label("Grass Status (%)");
                     let grass_plot = Plot::new("Grasses")
                         .legend(Legend::default())
-                        .height(120.0)
+                        .height(plot_height)
                         .show(ui, |plot_ui| {
                             plot_ui.line(plot_percent!(
                                 "Grass %",
@@ -1058,11 +1069,11 @@ fn ui_system(
                         });
                     handle_plot_click(&grass_plot, &mut *playback, sim.frames.len());
 
-                    // Burning Cells Plot
+                    ui.separator();
                     ui.label("Burning Cells (%)");
                     let burning_plot = Plot::new("Burning")
                         .legend(Legend::default())
-                        .height(120.0)
+                        .height(plot_height)
                         .show(ui, |plot_ui| {
                             let points: PlotPoints = (0..=last_index)
                                 .map(|i| {
@@ -1080,11 +1091,11 @@ fn ui_system(
                         });
                     handle_plot_click(&burning_plot, &mut *playback, sim.frames.len());
 
-                    // New Burning Per Step Plot
+                    ui.separator();
                     ui.label("New Burning Per Step");
                     let new_burning_plot = Plot::new("NewBurning")
                         .legend(Legend::default())
-                        .height(120.0)
+                        .height(plot_height)
                         .show(ui, |plot_ui| {
                             let mut prev = 0;
                             let points: PlotPoints = (0..=last_index)
@@ -1104,11 +1115,11 @@ fn ui_system(
                         });
                     handle_plot_click(&new_burning_plot, &mut *playback, sim.frames.len());
 
-                    // Burned Area Plot
+                    ui.separator();
                     ui.label("Burned Area (%)");
                     let burned_area_plot = Plot::new("BurnedArea")
                         .legend(Legend::default())
-                        .height(120.0)
+                        .height(plot_height)
                         .show(ui, |plot_ui| {
                             let points: PlotPoints = (0..=last_index)
                                 .map(|i| {
