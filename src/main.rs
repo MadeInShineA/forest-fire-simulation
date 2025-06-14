@@ -125,6 +125,7 @@ struct SimulationStats {
     burning_saplings_over_time: Vec<i64>,
     young_trees_over_time: Vec<i64>,
     burning_young_trees_over_time: Vec<i64>,
+    thunder_over_time: Vec<i64>,
 }
 impl SimulationStats {
     fn new_empty() -> Self {
@@ -140,6 +141,7 @@ impl SimulationStats {
             burning_saplings_over_time: vec![],
             young_trees_over_time: vec![],
             burning_young_trees_over_time: vec![],
+            thunder_over_time: vec![],
         }
     }
 }
@@ -663,6 +665,7 @@ fn simulation_update_system(
     while let Ok(msg) = ndjson.0.try_recv() {
         match msg {
             SimulationFrameMsg::Metadata { width, height } => {
+                // Reset stats for a new run!
                 *stats = SimulationStats {
                     frame_counter: 0,
                     trees_over_time: vec![],
@@ -675,6 +678,7 @@ fn simulation_update_system(
                     burning_saplings_over_time: vec![],
                     young_trees_over_time: vec![],
                     burning_young_trees_over_time: vec![],
+                    thunder_over_time: vec![],
                 };
                 commands.insert_resource(Simulation {
                     frames: Vec::new(),
@@ -687,7 +691,7 @@ fn simulation_update_system(
                 *has_started = true;
             }
             SimulationFrameMsg::Frame(frame) => {
-                // Always push stats for every frame
+                // Calculate stats for this frame
                 let mut trees = 0;
                 let mut burning_trees = 0;
                 let mut tree_ashes = 0;
@@ -698,6 +702,7 @@ fn simulation_update_system(
                 let mut burning_saplings = 0;
                 let mut young_trees = 0;
                 let mut burning_young_trees = 0;
+                let mut thunder = 0; // <--- NEW
 
                 for row in &frame {
                     for cell in row {
@@ -712,6 +717,7 @@ fn simulation_update_system(
                             "G" => grasses += 1,
                             "+" => burning_grasses += 1,
                             "-" => grass_ashes += 1,
+                            "TH" => thunder += 1, // <-- NEW
                             _ => {}
                         }
                     }
@@ -728,8 +734,11 @@ fn simulation_update_system(
                 stats
                     .burning_young_trees_over_time
                     .push(burning_young_trees);
+                stats.thunder_over_time.push(thunder); // <-- NEW
 
-                // Simulation resource
+                stats.frame_counter = stats.trees_over_time.len();
+
+                // Insert or update the Simulation resource
                 if let Some(ref mut sim) = sim {
                     sim.frames.push(frame.clone());
                 } else if *has_started {
@@ -743,8 +752,7 @@ fn simulation_update_system(
                     });
                 }
 
-                stats.frame_counter = stats.trees_over_time.len();
-
+                // Loading logic: leave loading as soon as we have any frames
                 if let Some(ref sim) = sim {
                     if sim.frames.len() >= 1 && loading.0 {
                         loading.0 = false;
@@ -1485,21 +1493,34 @@ fn ui_system(
                         .legend(Legend::default())
                         .height(plot_height)
                         .show(ui, |plot_ui| {
-                            let mut prev = 0;
+                            let mut prev_burning = 0;
                             let points: PlotPoints = (0..=last_index)
                                 .map(|i| {
-                                    let now = stats.burning_grasses_over_time[i]
+                                    let burning_now = stats.burning_grasses_over_time[i]
                                         + stats.burning_trees_over_time[i];
-                                    let diff = if i == 0 {
-                                        now
+                                    let new_burning = if i == 0 {
+                                        burning_now
                                     } else {
-                                        now.saturating_sub(prev)
+                                        burning_now.saturating_sub(prev_burning)
                                     };
-                                    prev = now;
-                                    [i as f64, diff as f64]
+                                    prev_burning = burning_now;
+                                    [i as f64, new_burning as f64]
                                 })
                                 .collect();
                             plot_ui.line(Line::new(points).name("New Burning"));
+
+                            // Thunder-caused new burning
+                            let thunder_points: PlotPoints = (0..=last_index)
+                                .map(|i| {
+                                    let thunder_burn = if i == 0 {
+                                        0
+                                    } else {
+                                        stats.thunder_over_time[i - 1]
+                                    };
+                                    [i as f64, thunder_burn as f64]
+                                })
+                                .collect();
+                            plot_ui.line(Line::new(thunder_points).name("New Burning (Thunder)"));
                         });
                     handle_plot_click(&new_burning_plot, &mut *playback, sim.frames.len());
 
