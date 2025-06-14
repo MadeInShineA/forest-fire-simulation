@@ -13,13 +13,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use std::{
-    fs::File,
-    io::{BufRead, BufReader, Seek, SeekFrom},
-    path::Path,
-    sync::mpsc::channel,
-    thread,
-};
+use std::{path::Path, sync::mpsc::channel, thread};
 
 use sysinfo::{ProcessRefreshKind, RefreshKind, Signal, System};
 
@@ -323,6 +317,7 @@ fn setup_assets(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let mut mesh_map = HashMap::new();
+    // Basic meshes
     mesh_map.insert("trunk", meshes.add(Mesh::from(Cylinder::new(1.0, 4.0))));
     mesh_map.insert("leaves", meshes.add(Mesh::from(Sphere::new(4.0))));
     mesh_map.insert("ash", meshes.add(Mesh::from(Cuboid::new(10.0, 0.5, 10.0))));
@@ -345,24 +340,30 @@ fn setup_assets(
     mesh_map.insert("burning_leaves2", mesh_map["leaves"].clone());
     mesh_map.insert("burning_leaves3", mesh_map["leaves"].clone());
 
-    // Sapling and young tree
+    // Sapling and young tree (keep these for shape, but not for color)
     mesh_map.insert("sapling", meshes.add(Mesh::from(Cylinder::new(0.5, 1.5))));
     mesh_map.insert(
         "young_tree",
         meshes.add(Mesh::from(Cylinder::new(0.8, 3.0))),
     );
-    mesh_map.insert(
-        "burning_sapling",
-        meshes.add(Mesh::from(Cylinder::new(0.5, 1.5))),
-    );
-    mesh_map.insert(
-        "burning_young_tree",
-        meshes.add(Mesh::from(Cylinder::new(0.8, 3.0))),
-    );
+
+    // Burning sapling & young tree meshes
+    mesh_map.insert("burning_sapling", mesh_map["sapling"].clone());
+    mesh_map.insert("burning_young_tree1", mesh_map["young_tree"].clone());
+    mesh_map.insert("burning_young_tree2", mesh_map["young_tree"].clone());
 
     // New foliage meshes
     mesh_map.insert("foliage_small", meshes.add(Mesh::from(Sphere::new(1.0))));
     mesh_map.insert("foliage_medium", meshes.add(Mesh::from(Sphere::new(2.5))));
+    mesh_map.insert("burning_foliage_small", mesh_map["foliage_small"].clone());
+    mesh_map.insert("burning_foliage_medium", mesh_map["foliage_medium"].clone());
+    mesh_map.insert(
+        "burning_foliage_medium_2",
+        mesh_map["foliage_medium"].clone(),
+    );
+
+    // THUNDER MESH
+    mesh_map.insert("thunder", meshes.add(Mesh::from(Cylinder::new(0.6, 7.0))));
 
     let mut mat_map = HashMap::new();
     mat_map.insert(
@@ -441,46 +442,9 @@ fn setup_assets(
             ..default()
         }),
     );
-    mat_map.insert(
-        "sapling",
-        materials.add(StandardMaterial {
-            base_color: Color::rgb(0.4, 0.6, 0.3),
-            ..default()
-        }),
-    );
-    mat_map.insert(
-        "young_tree",
-        materials.add(StandardMaterial {
-            base_color: Color::rgb(0.2, 0.5, 0.2),
-            ..default()
-        }),
-    );
-    mat_map.insert(
-        "burning_sapling",
-        materials.add(StandardMaterial {
-            base_color: Color::rgb(1.0, 0.5, 0.2),
-            emissive: Color::rgb(2.0, 1.0, 0.3),
-            ..default()
-        }),
-    );
-    mat_map.insert(
-        "burning_young_tree1",
-        materials.add(StandardMaterial {
-            base_color: Color::rgb(0.9, 0.3, 0.1),
-            emissive: Color::rgb(2.5, 1.0, 0.3),
-            ..default()
-        }),
-    );
-    mat_map.insert(
-        "burning_young_tree2",
-        materials.add(StandardMaterial {
-            base_color: Color::rgb(0.5, 0.15, 0.05),
-            emissive: Color::rgb(1.5, 0.4, 0.2),
-            ..default()
-        }),
-    );
+    // --- (Removed: sapling & young_tree materials!) ---
 
-    // Foliage materials
+    // Foliage (green)
     mat_map.insert(
         "foliage_small",
         materials.add(StandardMaterial {
@@ -492,6 +456,43 @@ fn setup_assets(
         "foliage_medium",
         materials.add(StandardMaterial {
             base_color: Color::rgb(0.1, 0.6, 0.1),
+            ..default()
+        }),
+    );
+    // Burning foliage for saplings and young trees (stage 1)
+    mat_map.insert(
+        "burning_foliage_small",
+        materials.add(StandardMaterial {
+            base_color: Color::rgb(1.0, 0.55, 0.2),
+            emissive: Color::rgb(3.0, 1.5, 0.7),
+            ..default()
+        }),
+    );
+    mat_map.insert(
+        "burning_foliage_medium",
+        materials.add(StandardMaterial {
+            base_color: Color::rgb(1.0, 0.45, 0.15),
+            emissive: Color::rgb(2.6, 1.0, 0.3),
+            ..default()
+        }),
+    );
+    // Burning foliage for young trees (stage 2 - darker)
+    mat_map.insert(
+        "burning_foliage_medium_2",
+        materials.add(StandardMaterial {
+            base_color: Color::rgb(0.6, 0.18, 0.08),
+            emissive: Color::rgb(1.5, 0.6, 0.3),
+            ..default()
+        }),
+    );
+    // Thunder
+    mat_map.insert(
+        "thunder",
+        materials.add(StandardMaterial {
+            base_color: Color::rgb(1.0, 1.0, 0.5),
+            emissive: Color::rgb(6.0, 6.0, 1.8),
+            perceptual_roughness: 0.2,
+            reflectance: 0.3,
             ..default()
         }),
     );
@@ -519,6 +520,7 @@ fn kind_from_str(cell: &str) -> &'static str {
         "!" => "burning_sapling",
         "&" => "burning_young_tree1",
         "@" => "burning_young_tree2",
+        "TH" => "thunder",
         other => panic!("Unknown cell type in kind_from_str: '{other}'"),
     }
 }
@@ -842,6 +844,7 @@ fn advance_frame_system(
                 offset_z + (height - 1 - iy) as f32 * cell_size * spacing,
             );
             match cell.as_str() {
+                // Mature tree and burning tree
                 "T" | "*" | "**" | "***" => {
                     spawn_cell(&mut commands, &cache, "trunk", pos + Vec3::Y * 2.0);
                     spawn_cell(
@@ -856,32 +859,92 @@ fn advance_frame_system(
                         pos + Vec3::Y * 7.0,
                     );
                 }
+                // Sapling: green and burning (always brown trunk)
                 "s" => {
-                    // Sapling trunk + foliage
-                    spawn_cell(&mut commands, &cache, "sapling", pos + Vec3::Y * 0.75);
+                    commands.spawn((
+                        PbrBundle {
+                            mesh: cache.meshes["sapling"].clone(),
+                            material: cache.materials["trunk"].clone(),
+                            transform: Transform::from_translation(pos + Vec3::Y * 0.75),
+                            ..default()
+                        },
+                        CellEntity,
+                        SimulationEntity,
+                    ));
                     spawn_cell(&mut commands, &cache, "foliage_small", pos + Vec3::Y * 1.6);
                 }
+                "!" => {
+                    commands.spawn((
+                        PbrBundle {
+                            mesh: cache.meshes["sapling"].clone(),
+                            material: cache.materials["trunk"].clone(),
+                            transform: Transform::from_translation(pos + Vec3::Y * 0.75),
+                            ..default()
+                        },
+                        CellEntity,
+                        SimulationEntity,
+                    ));
+                    spawn_cell(
+                        &mut commands,
+                        &cache,
+                        "burning_foliage_small",
+                        pos + Vec3::Y * 1.6,
+                    );
+                }
+                // Young tree: green and burning stages (always brown trunk)
                 "y" => {
-                    // Young tree trunk + foliage
-                    spawn_cell(&mut commands, &cache, "young_tree", pos + Vec3::Y * 1.5);
+                    commands.spawn((
+                        PbrBundle {
+                            mesh: cache.meshes["young_tree"].clone(),
+                            material: cache.materials["trunk"].clone(),
+                            transform: Transform::from_translation(pos + Vec3::Y * 1.5),
+                            ..default()
+                        },
+                        CellEntity,
+                        SimulationEntity,
+                    ));
                     spawn_cell(&mut commands, &cache, "foliage_medium", pos + Vec3::Y * 4.2);
                 }
-                "!" => {
+                "&" => {
+                    commands.spawn((
+                        PbrBundle {
+                            mesh: cache.meshes["young_tree"].clone(),
+                            material: cache.materials["trunk"].clone(),
+                            transform: Transform::from_translation(pos + Vec3::Y * 1.5),
+                            ..default()
+                        },
+                        CellEntity,
+                        SimulationEntity,
+                    ));
                     spawn_cell(
                         &mut commands,
                         &cache,
-                        "burning_sapling",
-                        pos + Vec3::Y * 0.75,
+                        "burning_foliage_medium",
+                        pos + Vec3::Y * 4.2,
                     );
                 }
-                "&" | "@" => {
+                "@" => {
+                    commands.spawn((
+                        PbrBundle {
+                            mesh: cache.meshes["young_tree"].clone(),
+                            material: cache.materials["trunk"].clone(),
+                            transform: Transform::from_translation(pos + Vec3::Y * 1.5),
+                            ..default()
+                        },
+                        CellEntity,
+                        SimulationEntity,
+                    ));
                     spawn_cell(
                         &mut commands,
                         &cache,
-                        "burning_young_tree",
-                        pos + Vec3::Y * 1.5,
+                        "burning_foliage_medium_2",
+                        pos + Vec3::Y * 4.2,
                     );
                 }
+                "TH" => {
+                    spawn_cell(&mut commands, &cache, "thunder", pos + Vec3::Y * 4.0);
+                }
+                // All other types use the kind_from_str mapping
                 other => {
                     spawn_cell(
                         &mut commands,

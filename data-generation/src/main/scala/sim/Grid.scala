@@ -18,6 +18,7 @@ case object BurningSapling extends CellType
 case object BurningYoungTree1 extends CellType
 case object BurningYoungTree2 extends CellType
 case object BurningGrass extends CellType
+case object Thunder extends CellType
 case class Ash(deadSteps: Int) extends CellType
 case class BurnedGrass(deadSteps: Int) extends CellType
 case class Cell(cellType: CellType, growSteps: Int = 0)
@@ -36,6 +37,7 @@ object JsonFormats {
     case BurningYoungTree1 => JsString("&")
     case BurningYoungTree2 => JsString("@")
     case BurningGrass      => JsString("+")
+    case Thunder           => JsString("TH")
     case Ash(_)            => JsString("A")
     case BurnedGrass(_)    => JsString("-")
   }
@@ -100,8 +102,26 @@ case class Grid(
     this.copy(cells = newCells)
   }
 
+  def strikeThunder(probability: Double = 0.1): Grid = {
+    val rand = new Random()
+    val newCells = cells.zipWithIndex.map { case (row, y) =>
+      row.zipWithIndex.map { case (cell, x) =>
+        cell.cellType match {
+          case Tree if rand.nextDouble() < probability => Cell(Thunder)
+          case _                                       => cell
+        }
+      }
+    }
+    this.copy(cells = newCells)
+  }
+
   def nextStep(enableWind: Boolean, windAngle: Int, windStrength: Int): Grid = {
     val rand = new Random()
+
+    // ⚡ Add thunder strikes before proceeding with the simulation step
+    val thunderedGrid =
+      this.strikeThunder(0.01) // adjust the probability as desired
+
     val windRad = math.toRadians(windAngle)
     val windVec = (math.sin(windRad), -math.cos(windRad))
 
@@ -131,11 +151,11 @@ case class Grid(
     )
 
     val newCells = Vector.tabulate(height, width) { (y, x) =>
-      val Cell(ct, grow) = cells(y)(x)
+      val Cell(ct, grow) = thunderedGrid.cells(y)(x)
       ct match {
         case Tree =>
           val ignites = neighborDirs.exists { case (dx, dy) =>
-            getCell(x + dx, y + dy).exists {
+            thunderedGrid.getCell(x + dx, y + dy).exists {
               case Cell(burnCt, _) if isBurning(burnCt) =>
                 rand.nextDouble() < treeIgniteProb * windBoost(dx, dy)
               case _ => false
@@ -145,7 +165,7 @@ case class Grid(
 
         case Sapling =>
           val ignites = neighborDirs.exists { case (dx, dy) =>
-            getCell(x + dx, y + dy).exists {
+            thunderedGrid.getCell(x + dx, y + dy).exists {
               case Cell(burnCt, _) if isBurning(burnCt) =>
                 rand.nextDouble() < treeIgniteProb * windBoost(dx, dy) * 1.2
               case _ => false
@@ -157,7 +177,7 @@ case class Grid(
 
         case YoungTree =>
           val ignites = neighborDirs.exists { case (dx, dy) =>
-            getCell(x + dx, y + dy).exists {
+            thunderedGrid.getCell(x + dx, y + dy).exists {
               case Cell(burnCt, _) if isBurning(burnCt) =>
                 rand.nextDouble() < treeIgniteProb * windBoost(dx, dy) * 1.1
               case _ => false
@@ -169,7 +189,7 @@ case class Grid(
 
         case Grass =>
           val ignites = neighborDirs.exists { case (dx, dy) =>
-            getCell(x + dx, y + dy).exists {
+            thunderedGrid.getCell(x + dx, y + dy).exists {
               case Cell(burnCt, _) if isBurning(burnCt) =>
                 rand.nextDouble() < grassIgniteProb * windBoost(dx, dy)
               case _ => false
@@ -177,6 +197,7 @@ case class Grid(
           }
           if (ignites) Cell(BurningGrass) else Cell(Grass)
 
+        case Thunder           => Cell(BurningTree1)
         case BurningTree1      => Cell(BurningTree2)
         case BurningTree2      => Cell(BurningTree3)
         case BurningTree3      => Cell(Ash(0))
@@ -187,7 +208,8 @@ case class Grid(
 
         case Ash(deadSteps) =>
           if (
-            deadSteps >= ashRegrowSteps - 1 && hasLivingOrWaterNeighbor(x, y)
+            deadSteps >= ashRegrowSteps - 1 &&
+            thunderedGrid.hasLivingOrWaterNeighbor(x, y)
           ) {
             if (rand.nextDouble() < ashToTreeProb) Cell(Sapling)
             else Cell(Grass)
@@ -195,16 +217,14 @@ case class Grid(
 
         case BurnedGrass(deadSteps) =>
           if (
-            deadSteps >= burnedGrassRegrowSteps - 1 && hasLivingOrWaterNeighbor(
-              x,
-              y
-            )
+            deadSteps >= burnedGrassRegrowSteps - 1 &&
+            thunderedGrid.hasLivingOrWaterNeighbor(x, y)
           ) {
             if (rand.nextDouble() < burnedGrassToGrassProb) Cell(Grass)
             else Cell(Sapling)
           } else Cell(BurnedGrass(deadSteps + 1))
 
-        case _ => cells(y)(x)
+        case _ => thunderedGrid.cells(y)(x)
       }
     }
 
@@ -269,6 +289,7 @@ case class Grid(
     case BurningSapling    => "!"
     case BurningYoungTree1 => "&"
     case BurningYoungTree2 => "@"
+    case Thunder           => "TH"
     case Ash(_)            => "x"
     case BurnedGrass(_)    => "-"
   }
@@ -281,7 +302,7 @@ object Grid {
   }
   def randomCell(): Cell = rand.nextInt(100) match {
     case n if n < 10 => Cell(Water)
-    case n if n < 70 => Cell(Grass)
+    case n if n < 40 => Cell(Grass)
     case _           => Cell(Tree)
   }
 }
