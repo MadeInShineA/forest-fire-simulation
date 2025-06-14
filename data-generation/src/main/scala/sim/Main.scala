@@ -1,7 +1,7 @@
 package sim
 
 import JsonFormats._
-import scala.util.{Try, Using}
+import scala.util.{Try, Using, Random}
 import java.io.{FileWriter, PrintWriter}
 import play.api.libs.json._
 import scala.io.Source
@@ -14,7 +14,7 @@ object Main extends App {
   val List(
     width,
     height,
-    thunderPercentage, // <-- thunder is third
+    thunderPercentage,
     fireTree,
     fireGrass,
     windEnabled,
@@ -22,6 +22,10 @@ object Main extends App {
     windStrength
   ) = finalArgs
 
+  // ==== FIXED RNG SEED (set here) ====
+  // val rngSeed = 42
+  // val rand = new Random(rngSeed)
+  val rand = new Random()
   def writeInitialFiles(grid: Grid): Unit =
     Using.resource(new PrintWriter("assets/simulation_stream.ndjson")) { out =>
       val metadata = Json.obj("width" -> width, "height" -> height)
@@ -83,18 +87,19 @@ object Main extends App {
           case _ => ()
         }
       }
-      Thread.sleep(100)
+      // Thread.sleep(100)
       loop(nextGrid, out, step, defaultControl)
     } else {
-      Thread.sleep(20)
+      // Thread.sleep(20)
       loop(grid, out, lastStepSeen, defaultControl)
     }
   }
 
-  val initialGrid = Grid(width, height).igniteRandomFires(fireTree, fireGrass)
+  val initialGrid =
+    Grid(width, height, rand).igniteRandomFires(fireTree, fireGrass)
   writeInitialFiles(initialGrid)
 
-  Thread.sleep(100)
+  // Thread.sleep(100)
   Using.resource(new FileWriter("assets/simulation_stream.ndjson", true)) {
     out =>
       loop(

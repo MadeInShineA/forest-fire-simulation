@@ -5,3 +5,4 @@
 project/
 target/
 assets/*
+data-visualization/venv/
