@@ -78,22 +78,31 @@ struct Simulation {
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum SimAssetType {
+    GrowingTree1,
+    GrowingTree2,
     Tree,
+    BurnedTree,
     // BurningTree,
-    // Grass,
+    Grass,
+    BurnedGrass,
     // Ash,
-    // Water,
+    Water,
     // ...add others as needed
 }
 
 impl SimAssetType {
     pub fn asset_path(&self) -> &'static str {
         match self {
+            SimAssetType::GrowingTree1 => "growing-tree1.glb#Scene0",
+            SimAssetType::GrowingTree2 => "growing-tree2.glb#Scene0",
             SimAssetType::Tree => "tree.glb#Scene0",
+            SimAssetType::BurnedTree => "burned-tree.glb#Scene0",
+
             //SimAssetType::BurningTree => "assets/burning_tree.glb#Scene0",
-            // SimAssetType::Grass => "assets/grass.glb#Scene0",
+            SimAssetType::Grass => "grass.glb#Scene0",
+            SimAssetType::BurnedGrass => "burned-grass.glb#Scene0",
             // SimAssetType::Ash => "assets/ash.glb#Scene0",
-            // SimAssetType::Water => "water.glb#Scene0",
+            SimAssetType::Water => "water.glb#Scene0",
         }
     }
 }
@@ -348,11 +357,15 @@ fn spawn_ndjson_tailer(
 fn setup_sim_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut scenes = HashMap::new();
     for asset_type in [
+        SimAssetType::GrowingTree1,
+        SimAssetType::GrowingTree2,
         SimAssetType::Tree,
+        SimAssetType::BurnedTree,
         // SimAssetType::BurningTree,
-        // SimAssetType::Grass,
+        SimAssetType::Grass,
+        SimAssetType::BurnedGrass,
         // SimAssetType::Ash,
-        // SimAssetType::Water,
+        SimAssetType::Water,
         // add more if needed
     ] {
         let handle = asset_server.load(asset_type.asset_path());
@@ -953,6 +966,19 @@ fn advance_frame_system(
                 "T" => {
                     spawn_sim_asset(&mut commands, &scenes, SimAssetType::Tree, pos);
                 }
+                "A" => {
+                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurnedTree, pos);
+                }
+                "G" => {
+                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::Grass, pos);
+                }
+                "-" => {
+                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurnedGrass, pos);
+                }
+                "W" => {
+                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::Water, pos);
+                }
+
                 // All your original cell handling code, unchanged:
                 "*" | "**" | "***" => {
                     spawn_cell(&mut commands, &cache, "trunk", pos + Vec3::Y * 2.0);
@@ -969,17 +995,7 @@ fn advance_frame_system(
                     );
                 }
                 "s" => {
-                    commands.spawn((
-                        PbrBundle {
-                            mesh: cache.meshes["sapling"].clone(),
-                            material: cache.materials["trunk"].clone(),
-                            transform: Transform::from_translation(pos + Vec3::Y * 0.75),
-                            ..default()
-                        },
-                        CellEntity,
-                        SimulationEntity,
-                    ));
-                    spawn_cell(&mut commands, &cache, "foliage_small", pos + Vec3::Y * 1.6);
+                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::GrowingTree1, pos);
                 }
                 "!" => {
                     commands.spawn((
@@ -1000,17 +1016,7 @@ fn advance_frame_system(
                     );
                 }
                 "y" => {
-                    commands.spawn((
-                        PbrBundle {
-                            mesh: cache.meshes["young_tree"].clone(),
-                            material: cache.materials["trunk"].clone(),
-                            transform: Transform::from_translation(pos + Vec3::Y * 1.5),
-                            ..default()
-                        },
-                        CellEntity,
-                        SimulationEntity,
-                    ));
-                    spawn_cell(&mut commands, &cache, "foliage_medium", pos + Vec3::Y * 4.2);
+                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::GrowingTree2, pos);
                 }
                 "&" => {
                     commands.spawn((
@@ -1142,6 +1148,7 @@ fn advance_frame_system(
                         },));
                     });
                 }
+
                 // All other types use the kind_from_str mapping
                 other => {
                     spawn_cell(
