@@ -4,5 +4,6 @@
 .scalafmt.conf
 project/
 target/
-assets/*
 data-visualization/venv/
+res/*.json
+res/*.ndjson

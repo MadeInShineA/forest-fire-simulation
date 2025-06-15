@@ -1,4 +1,5 @@
 use bevy::input::mouse::{MouseMotion, MouseWheel};
+
 use bevy::input::ButtonInput;
 use bevy::math::primitives::{Cuboid, Cylinder, Sphere};
 use bevy::prelude::*;
@@ -73,6 +74,33 @@ struct Simulation {
     current: usize,
     width: usize,
     height: usize,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum SimAssetType {
+    Tree,
+    // BurningTree,
+    // Grass,
+    // Ash,
+    // Water,
+    // ...add others as needed
+}
+
+impl SimAssetType {
+    pub fn asset_path(&self) -> &'static str {
+        match self {
+            SimAssetType::Tree => "tree.glb#Scene0",
+            //SimAssetType::BurningTree => "assets/burning_tree.glb#Scene0",
+            // SimAssetType::Grass => "assets/grass.glb#Scene0",
+            // SimAssetType::Ash => "assets/ash.glb#Scene0",
+            // SimAssetType::Water => "water.glb#Scene0",
+        }
+    }
+}
+
+#[derive(Resource, Default)]
+pub struct SimAssetHandles {
+    pub scenes: HashMap<SimAssetType, Handle<Scene>>,
 }
 
 #[derive(Resource, Default)]
@@ -317,6 +345,49 @@ fn spawn_ndjson_tailer(
 
 //──────────────────── Asset Setup ──────────────────────//
 
+fn setup_sim_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
+    let mut scenes = HashMap::new();
+    for asset_type in [
+        SimAssetType::Tree,
+        // SimAssetType::BurningTree,
+        // SimAssetType::Grass,
+        // SimAssetType::Ash,
+        // SimAssetType::Water,
+        // add more if needed
+    ] {
+        let handle = asset_server.load(asset_type.asset_path());
+        scenes.insert(asset_type, handle);
+    }
+    commands.insert_resource(SimAssetHandles { scenes });
+}
+
+fn spawn_sim_asset(
+    commands: &mut Commands,
+    handles: &SimAssetHandles,
+    asset_type: SimAssetType,
+    pos: Vec3,
+) {
+    // Set this scale as big as you need; adjust if trees are still too small!
+    const SCALE: f32 = 20.0; // Try 40.0, 80.0, 100.0 if needed
+
+    if let Some(scene) = handles.scenes.get(&asset_type) {
+        commands.spawn((
+            SceneBundle {
+                scene: scene.clone(),
+                transform: Transform {
+                    translation: pos,
+                    scale: Vec3::splat(SCALE),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            CellEntity,
+            SimulationEntity,
+        ));
+    } else {
+        eprintln!("Sim asset {:?} not loaded!", asset_type);
+    }
+}
 fn setup_assets(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -805,6 +876,7 @@ fn advance_frame_system(
     mut playback: ResMut<PlaybackControl>,
     cells: Query<Entity, With<CellEntity>>,
     cache: Res<CachedAssets>,
+    scenes: Res<SimAssetHandles>,
     _stats: ResMut<SimulationStats>,
 ) {
     let sim = match sim.as_mut() {
@@ -878,8 +950,11 @@ fn advance_frame_system(
                 offset_z + (height - 1 - iy) as f32 * cell_size * spacing,
             );
             match cell.as_str() {
-                // Mature tree and burning tree
-                "T" | "*" | "**" | "***" => {
+                "T" => {
+                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::Tree, pos);
+                }
+                // All your original cell handling code, unchanged:
+                "*" | "**" | "***" => {
                     spawn_cell(&mut commands, &cache, "trunk", pos + Vec3::Y * 2.0);
                     spawn_cell(
                         &mut commands,
@@ -893,7 +968,6 @@ fn advance_frame_system(
                         pos + Vec3::Y * 7.0,
                     );
                 }
-                // Sapling: green and burning (always brown trunk)
                 "s" => {
                     commands.spawn((
                         PbrBundle {
@@ -925,7 +999,6 @@ fn advance_frame_system(
                         pos + Vec3::Y * 1.6,
                     );
                 }
-                // Young tree: green and burning stages (always brown trunk)
                 "y" => {
                     commands.spawn((
                         PbrBundle {
@@ -976,6 +1049,7 @@ fn advance_frame_system(
                     );
                 }
                 "TH" => {
+                    // All your thunder logic as before
                     let thunder_parent = commands
                         .spawn((
                             SpatialBundle {
@@ -1676,7 +1750,7 @@ fn main() {
             ..Default::default()
         }))
         .add_plugins(EguiPlugin)
-        .add_systems(Startup, setup_assets)
+        .add_systems(Startup, (setup_assets, setup_sim_assets))
         .add_systems(
             Update,
             (
