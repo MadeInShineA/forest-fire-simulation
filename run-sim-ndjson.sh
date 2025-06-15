@@ -5,4 +5,4 @@ for arg in "$@"; do
   echo "Argument: $arg"
 done
 
-java -cp "$CP" sim.Main "$@"
+java -cp "$CP" Main "$@"

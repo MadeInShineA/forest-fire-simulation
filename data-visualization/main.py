@@ -8,8 +8,8 @@ import psutil
 # === Constants ===
 PARENT_DIR = os.path.abspath("..")
 SIM_SCRIPT = "./run-sim-ndjson.sh"
-SIM_FILE = os.path.join(PARENT_DIR, "assets/simulation_stream.ndjson")
-SIM_CONTROL = os.path.join(PARENT_DIR, "assets/sim_control.json")
+SIM_FILE = os.path.join(PARENT_DIR, "res/simulation_stream.ndjson")
+SIM_CONTROL = os.path.join(PARENT_DIR, "res/sim_control.json")
 MAX_WIND_STRENGTH = 50
 REPEATS = 5
 WIND_STRENGTH_STEP = 1
@@ -193,29 +193,29 @@ fig, axs = plt.subplots(2, 2, figsize=(14, 10))
 fig.suptitle("Forest Fire Simulation Metrics vs Wind Strength (Averaged)", fontsize=16)
 
 axs[0, 0].plot(wind_strengths, max_burned_percents, marker="o")
-axs[0, 0].set_title("Max Burned % of Burnable Cells (any frame)")
-axs[0, 0].set_xlabel("Wind Strength")
+axs[0, 0].set_title("Max Burned % of Burnable Cells")
+axs[0, 0].set_xlabel("Wind Strength (km/h)")
 axs[0, 0].set_ylabel("Max Burned (%)")
 axs[0, 0].grid()
 
 axs[0, 1].plot(wind_strengths, burn_durations, marker="o")
 axs[0, 1].set_title("Burn Duration (frames)")
-axs[0, 1].set_xlabel("Wind Strength")
+axs[0, 1].set_xlabel("Wind Strength (km/h)")
 axs[0, 1].set_ylabel("Duration (frames)")
 axs[0, 1].grid()
 
 axs[1, 0].plot(wind_strengths, final_burned_percents, marker="o")
 axs[1, 0].set_title("Final Burned % of Burnable Cells (at end)")
-axs[1, 0].set_xlabel("Wind Strength")
+axs[1, 0].set_xlabel("Wind Strength (km/h)")
 axs[1, 0].set_ylabel("Final Burned (%)")
 axs[1, 0].grid()
 
 axs[1, 1].plot(wind_strengths, peak_fire_fronts, marker="o")
 axs[1, 1].set_title("Peak Fire Front (cells)")
-axs[1, 1].set_xlabel("Wind Strength")
+axs[1, 1].set_xlabel("Wind Strength (km/h)")
 axs[1, 1].set_ylabel("Peak Burning (cells)")
 axs[1, 1].grid()
 
 plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-plt.savefig("fire_metrics_vs_wind_strength_averaged.png", dpi=150)
-print("Plot saved to fire_metrics_vs_wind_strength_averaged.png")
+plt.savefig("../res/fire_metrics_vs_wind_strength_averaged.png", dpi=150)
+print("Plot saved to res/fire_metrics_vs_wind_strength_averaged.png")

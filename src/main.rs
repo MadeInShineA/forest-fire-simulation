@@ -105,7 +105,7 @@ pub struct SimControl {
     pub step: Option<bool>,
 }
 
-const CONTROL_PATH: &str = "assets/sim_control.json";
+const CONTROL_PATH: &str = "res/sim_control.json";
 
 #[derive(Resource, Default)]
 struct PlaybackControl {
@@ -223,9 +223,7 @@ fn spawn_ndjson_tailer(
     use std::fs::File;
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
-    let parent = Path::new(path)
-        .parent()
-        .expect("assets directory must exist");
+    let parent = Path::new(path).parent().expect("res directory must exist");
     let (tx_fs, rx_fs) = channel::<notify::Result<Event>>();
     let mut watcher = RecommendedWatcher::new(
         move |res| {
@@ -622,7 +620,7 @@ fn start_simulation_button_system(
     playback.paused = true;
     playback.jump_to_frame = Some(0);
 
-    let _ = std::fs::remove_file("assets/simulation_stream.ndjson");
+    let _ = std::fs::remove_file("res/simulation_stream.ndjson");
     let cmdline = vec![
         params.width.to_string(),
         params.height.to_string(),
@@ -676,7 +674,7 @@ fn start_simulation_button_system(
 
     let (tx, rx) = unbounded::<SimulationFrameMsg>();
     commands.insert_resource(NdjsonChannel(rx));
-    let watcher = spawn_ndjson_tailer(tx, "assets/simulation_stream.ndjson")
+    let watcher = spawn_ndjson_tailer(tx, "res/simulation_stream.ndjson")
         .expect("Failed to watch NDJSON file");
     commands.insert_resource(FsWatcher(watcher));
 
