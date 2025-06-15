@@ -323,7 +323,7 @@ fn setup_assets(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let mut mesh_map = HashMap::new();
-    // Basic meshes
+    // Tree parts
     mesh_map.insert("trunk", meshes.add(Mesh::from(Cylinder::new(1.0, 4.0))));
     mesh_map.insert("leaves", meshes.add(Mesh::from(Sphere::new(4.0))));
     mesh_map.insert("ash", meshes.add(Mesh::from(Cuboid::new(10.0, 0.5, 10.0))));
@@ -346,19 +346,15 @@ fn setup_assets(
     mesh_map.insert("burning_leaves2", mesh_map["leaves"].clone());
     mesh_map.insert("burning_leaves3", mesh_map["leaves"].clone());
 
-    // Sapling and young tree (keep these for shape, but not for color)
     mesh_map.insert("sapling", meshes.add(Mesh::from(Cylinder::new(0.5, 1.5))));
     mesh_map.insert(
         "young_tree",
         meshes.add(Mesh::from(Cylinder::new(0.8, 3.0))),
     );
-
-    // Burning sapling & young tree meshes
     mesh_map.insert("burning_sapling", mesh_map["sapling"].clone());
     mesh_map.insert("burning_young_tree1", mesh_map["young_tree"].clone());
     mesh_map.insert("burning_young_tree2", mesh_map["young_tree"].clone());
 
-    // New foliage meshes
     mesh_map.insert("foliage_small", meshes.add(Mesh::from(Sphere::new(1.0))));
     mesh_map.insert("foliage_medium", meshes.add(Mesh::from(Sphere::new(2.5))));
     mesh_map.insert("burning_foliage_small", mesh_map["foliage_small"].clone());
@@ -368,14 +364,15 @@ fn setup_assets(
         mesh_map["foliage_medium"].clone(),
     );
 
+    // Cloud and thunder visual
     mesh_map.insert("cloud", meshes.add(Mesh::from(Sphere::new(4.0))));
     mesh_map.insert("cloud_puff", meshes.add(Mesh::from(Sphere::new(1.0))));
-
     mesh_map.insert(
         "lightning_segment",
         meshes.add(Mesh::from(Cylinder::new(0.3, 1.0))),
     );
 
+    // Material setup
     let mut mat_map = HashMap::new();
     mat_map.insert(
         "trunk",
@@ -453,9 +450,6 @@ fn setup_assets(
             ..default()
         }),
     );
-    // --- (Removed: sapling & young_tree materials!) ---
-
-    // Foliage (green)
     mat_map.insert(
         "foliage_small",
         materials.add(StandardMaterial {
@@ -470,7 +464,6 @@ fn setup_assets(
             ..default()
         }),
     );
-    // Burning foliage for saplings and young trees (stage 1)
     mat_map.insert(
         "burning_foliage_small",
         materials.add(StandardMaterial {
@@ -487,7 +480,6 @@ fn setup_assets(
             ..default()
         }),
     );
-    // Burning foliage for young trees (stage 2 - darker)
     mat_map.insert(
         "burning_foliage_medium_2",
         materials.add(StandardMaterial {
@@ -496,7 +488,6 @@ fn setup_assets(
             ..default()
         }),
     );
-
     mat_map.insert(
         "cloud",
         materials.add(StandardMaterial {
@@ -517,6 +508,7 @@ fn setup_assets(
             ..default()
         }),
     );
+
     commands.insert_resource(CachedAssets {
         meshes: mesh_map,
         materials: mat_map,
@@ -984,77 +976,87 @@ fn advance_frame_system(
                     );
                 }
                 "TH" => {
-                    let tree_top = pos.y + 7.0;
-                    let bolt_top = tree_top + 60.0;
+                    let thunder_parent = commands
+                        .spawn((
+                            SpatialBundle {
+                                transform: Transform::from_translation(pos),
+                                ..default()
+                            },
+                            CellEntity,
+                            SimulationEntity,
+                        ))
+                        .id();
 
-                    let segments = 20;
-                    let amplitude = 2.5;
-                    let radius = 1.2;
+                    commands.entity(thunder_parent).with_children(|parent| {
+                        // Tree
+                        parent.spawn((PbrBundle {
+                            mesh: cache.meshes["trunk"].clone(),
+                            material: cache.materials["trunk"].clone(),
+                            transform: Transform::from_translation(Vec3::Y * 2.0),
+                            ..default()
+                        },));
+                        parent.spawn((PbrBundle {
+                            mesh: cache.meshes["leaves"].clone(),
+                            material: cache.materials["leaves"].clone(),
+                            transform: Transform::from_translation(Vec3::Y * 7.0),
+                            ..default()
+                        },));
 
-                    // Lightning bolt: zigzag shape
-                    let mut points = Vec::new();
-                    for i in 0..=segments {
-                        let t = i as f32 / segments as f32;
-                        let y = bolt_top - (bolt_top - tree_top) * t;
-                        let x_offset = if i % 2 == 0 { amplitude } else { -amplitude };
-                        let z_offset = if i % 4 < 2 { amplitude } else { -amplitude };
-                        points.push(Vec3::new(
-                            pos.x + x_offset * (1.0 - t),
-                            y,
-                            pos.z + z_offset * (1.0 - t),
-                        ));
-                    }
+                        // Cloud puffs
+                        let cloud_center = Vec3::Y * (7.0 + 60.0);
+                        let puff_offsets = [
+                            Vec3::ZERO,
+                            Vec3::new(2.0, 0.5, 0.0),
+                            Vec3::new(-2.0, 0.5, 0.0),
+                            Vec3::new(0.0, 0.5, 2.0),
+                            Vec3::new(0.0, 0.5, -2.0),
+                            Vec3::new(1.2, 1.0, 1.2),
+                            Vec3::new(-1.2, 1.0, -1.2),
+                        ];
+                        for offset in puff_offsets {
+                            parent.spawn((PbrBundle {
+                                mesh: cache.meshes["cloud_puff"].clone(),
+                                material: cache.materials["cloud"].clone(),
+                                transform: Transform::from_translation(cloud_center + offset)
+                                    .with_scale(Vec3::splat(2.2)),
+                                ..default()
+                            },));
+                        }
 
-                    for pair in points.windows(2) {
-                        let from = pair[0];
-                        let to = pair[1];
-                        let dir = to - from;
-                        let length = dir.length();
-                        let rotation = Quat::from_rotation_arc(Vec3::Y, dir.normalize());
-                        let center = from + dir * 0.5;
+                        // Lightning bolt segments
+                        let tree_top = 7.0;
+                        let bolt_top = tree_top + 60.0;
+                        let segments = 20;
+                        let amplitude = 2.5;
+                        let radius = 1.2;
 
-                        commands.spawn((
-                            PbrBundle {
+                        let mut points = Vec::new();
+                        for i in 0..=segments {
+                            let t = i as f32 / segments as f32;
+                            let y = bolt_top - (bolt_top - tree_top) * t;
+                            let x_offset = if i % 2 == 0 { amplitude } else { -amplitude };
+                            let z_offset = if i % 4 < 2 { amplitude } else { -amplitude };
+                            points.push(Vec3::new(x_offset * (1.0 - t), y, z_offset * (1.0 - t)));
+                        }
+                        for pair in points.windows(2) {
+                            let from = pair[0];
+                            let to = pair[1];
+                            let dir = to - from;
+                            let length = dir.length();
+                            let rotation = Quat::from_rotation_arc(Vec3::Y, dir.normalize());
+                            let center = from + dir * 0.5;
+                            parent.spawn((PbrBundle {
                                 mesh: cache.meshes["lightning_segment"].clone(),
                                 material: cache.materials["thunder"].clone(),
                                 transform: Transform::from_translation(center)
                                     .with_rotation(rotation)
                                     .with_scale(Vec3::new(radius, length / 2.0, radius)),
                                 ..default()
-                            },
-                            CellEntity,
-                            SimulationEntity,
-                        ));
-                    }
+                            },));
+                        }
 
-                    // ☁️ Cloud just above the start of the lightning
-                    let cloud_center = Vec3::new(pos.x, bolt_top, pos.z);
-                    let puff_offsets = [
-                        Vec3::ZERO,
-                        Vec3::new(2.0, 0.5, 0.0),
-                        Vec3::new(-2.0, 0.5, 0.0),
-                        Vec3::new(0.0, 0.5, 2.0),
-                        Vec3::new(0.0, 0.5, -2.0),
-                        Vec3::new(1.2, 1.0, 1.2),
-                        Vec3::new(-1.2, 1.0, -1.2),
-                    ];
-                    for offset in puff_offsets {
-                        commands.spawn((
-                            PbrBundle {
-                                mesh: cache.meshes["cloud_puff"].clone(),
-                                material: cache.materials["cloud"].clone(),
-                                transform: Transform::from_translation(cloud_center + offset)
-                                    .with_scale(Vec3::splat(2.2)),
-                                ..default()
-                            },
-                            CellEntity,
-                            SimulationEntity,
-                        ));
-                    }
-
-                    // ⚡ Optional light flash under cloud
-                    commands.spawn((
-                        PointLightBundle {
+                        // Point light for flash
+                        parent.spawn((PointLightBundle {
                             transform: Transform::from_translation(cloud_center - Vec3::Y * 1.5),
                             point_light: PointLight {
                                 intensity: 18000.0,
@@ -1063,14 +1065,8 @@ fn advance_frame_system(
                                 ..default()
                             },
                             ..default()
-                        },
-                        CellEntity,
-                        SimulationEntity,
-                    ));
-
-                    // 🌳 Tree
-                    spawn_cell(&mut commands, &cache, "trunk", pos + Vec3::Y * 2.0);
-                    spawn_cell(&mut commands, &cache, "leaves", pos + Vec3::Y * 7.0);
+                        },));
+                    });
                 }
                 // All other types use the kind_from_str mapping
                 other => {

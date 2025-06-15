@@ -1,0 +1,8 @@
+{
+  "thunderPercentage": 8,
+  "windAngle": 180,
+  "windStrength": 28,
+  "windEnabled": true,
+  "paused": true,
+  "step": false
+}
