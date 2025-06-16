@@ -32,6 +32,13 @@ Regrowth, ignition probabilities, fire jump (“spotting”), and wind amplifica
 
 ---
 
+## 📄 Model Variables & Scientific Rationale
+
+For a comprehensive explanation of the simulation’s scientific foundations including parameter choices, wind amplification formulas, and direct references to relevant ecological and wildfire modeling literature see:
+- [Forest Fire Simulation: Model Variables and Wind Formulation](https://github.com/MadeInShineA/forest-fire-simulation/blob/main/forest_fire_simulation_model.md)
+
+---
+
 ## 🌲 Visual Examples
 
 ### Simulation Snapshot
@@ -73,7 +80,7 @@ This figure summarizes how wildfire intensity and landscape impact vary as wind 
   The percentage of all burnable land that remains burned after the fire ends.
 
 **Phase Transition:**  
-At low wind, fire is limited—most of the forest survives.  
+At low wind, fire is limited most of the forest survives.  
 Above a critical wind speed (near 20 km/h), fire jumps and wind amplification make large-scale burns much more likely, resulting in nearly total loss of vegetation.  
 This critical transition appears as a rapid, S-shaped (“sigmoid”) jump in the metrics, driven by the model’s wind amplification and probabilistic fire spread.
 
