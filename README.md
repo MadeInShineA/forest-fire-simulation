@@ -40,7 +40,6 @@ Regrowth, ignition probabilities, fire jump (“spotting”), and wind amplifica
   
 *Snapshot of the forest fire simulation in progress.*
 
----
 
 ### Simulation Time-Series
 
@@ -48,7 +47,6 @@ Regrowth, ignition probabilities, fire jump (“spotting”), and wind amplifica
 
 *Tracking living, burning, and regrowing cells across time steps.*
 
----
 
 ### Animated Simulation
 
