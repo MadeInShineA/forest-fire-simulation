@@ -132,9 +132,11 @@ struct FrameTimer(Timer);
 struct SimulationParams {
     width: u32,
     height: u32,
+    thunder_percentage: u32,
+    steps_between_thunder: u32,
+
     burning_trees: u32,
     burning_grasses: u32,
-    thunder_percentage: u32,
     is_wind_toggled: bool,
     wind_angle: u32,
     wind_strength: u32,
@@ -145,6 +147,8 @@ struct SimulationParams {
 pub struct SimControl {
     #[serde(rename = "thunderPercentage")]
     pub thunder_percentage: Option<u32>,
+    #[serde(rename = "stepsBetweenThunder")]
+    pub steps_between_thunder: Option<u32>,
     #[serde(rename = "windAngle")]
     pub wind_angle: Option<i32>,
     #[serde(rename = "windStrength")]
@@ -247,6 +251,9 @@ fn update_sim_control(update: SimControl) {
     if let Some(val) = update.thunder_percentage {
         control.thunder_percentage = Some(val);
     }
+    if let Some(val) = update.steps_between_thunder {
+        control.steps_between_thunder = Some(val);
+    }
     if let Some(val) = update.wind_angle {
         control.wind_angle = Some(val);
     }
@@ -263,7 +270,6 @@ fn update_sim_control(update: SimControl) {
     let json = serde_json::to_string_pretty(&control).unwrap();
     fs::write(CONTROL_PATH, json).expect("Failed to write sim_control.json");
 }
-
 //──────────────────── NDJSON File Watcher ──────────────────────//
 
 fn spawn_ndjson_tailer(
@@ -721,6 +727,7 @@ fn start_simulation_button_system(
         params.width.to_string(),
         params.height.to_string(),
         params.thunder_percentage.to_string(),
+        params.steps_between_thunder.to_string(),
         params.burning_trees.to_string(),
         params.burning_grasses.to_string(),
         (params.is_wind_toggled as i32).to_string(),
@@ -780,6 +787,7 @@ fn start_simulation_button_system(
     update_sim_control(SimControl {
         paused: Some(false),
         thunder_percentage: Some(params.thunder_percentage),
+        steps_between_thunder: Some(params.steps_between_thunder),
         wind_enabled: Some(params.is_wind_toggled),
         wind_angle: Some(params.wind_angle as i32),
         wind_strength: Some(params.wind_strength as i32),
@@ -1228,6 +1236,11 @@ fn ui_system(
                 egui::Slider::new(&mut params.thunder_percentage, 0..=100)
                     .text("Thunder per step (%)"),
             );
+            ui.add(
+                egui::Slider::new(&mut params.steps_between_thunder, 1..=100)
+                    .text("Steps between thunder"),
+            );
+
             ui.add(egui::Checkbox::new(
                 &mut params.is_wind_toggled,
                 "Enable wind",
@@ -1245,6 +1258,7 @@ fn ui_system(
                 if sim_ref.is_some() && ui.button("Update Thunder").clicked() {
                     update_sim_control(SimControl {
                         thunder_percentage: Some(params.thunder_percentage),
+                        steps_between_thunder: Some(params.steps_between_thunder),
                         ..Default::default()
                     });
                 }
@@ -1660,9 +1674,10 @@ fn main() {
         .insert_resource(SimulationParams {
             width: 20,
             height: 20,
+            thunder_percentage: 0,
+            steps_between_thunder: 1,
             burning_trees: 5,
             burning_grasses: 10,
-            thunder_percentage: 0,
             is_wind_toggled: false,
             wind_angle: 0,
             wind_strength: 1,

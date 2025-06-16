@@ -193,13 +193,23 @@ case class Grid(
   }
 
   def strikeThunder(percentage: Int): Grid = {
+    // 1. Collect all tree positions
+    val treePositions = for {
+      y <- 0 until height
+      x <- 0 until width
+      if cells(y)(x).cellType == Tree
+    } yield (x, y)
+
+    // 2. How many to strike?
+    val numToStrike = math.ceil(treePositions.size * percentage / 100.0).toInt
+    val toStrike: Set[(Int, Int)] =
+      rand.shuffle(treePositions).take(numToStrike).toSet
+
+    // 3. Replace those with Thunder
     val newCells = cells.zipWithIndex.map { case (row, y) =>
       row.zipWithIndex.map { case (cell, x) =>
-        cell.cellType match {
-          case Tree if this.rand.nextDouble() < percentage / 100.0 =>
-            Cell(Thunder)
-          case _ => cell
-        }
+        if (toStrike.contains((x, y))) Cell(Thunder)
+        else cell
       }
     }
     this.copy(cells = newCells)
@@ -234,7 +244,8 @@ case class Grid(
       thunderPercentage: Int,
       enableWind: Boolean,
       windAngle: Int,
-      windStrength: Int
+      windStrength: Int,
+      doThunderThisStep: Boolean
   ): Grid = {
     val windRad = math.toRadians(windAngle)
     val windVec = (math.sin(windRad), -math.cos(windRad))
@@ -365,8 +376,10 @@ case class Grid(
       }
     }
     val updatedGrid = this.copy(cells = newCells, rand = this.rand)
-    updatedGrid.strikeThunder(thunderPercentage)
-
+    if (doThunderThisStep)
+      updatedGrid.strikeThunder(thunderPercentage)
+    else
+      updatedGrid
   }
 }
 

@@ -7,14 +7,15 @@ import scala.io.Source
 object Main extends App {
   val RUN_FAST = false
 
-  val defaults = List(20, 20, 2, 5, 20, 0, 0, 1)
+  val defaults = List(20, 20, 0, 1, 5, 20, 0, 0, 1)
   val parsedArgs = args.dropWhile(_ == "--").map(_.toIntOption).toList
   val finalArgs =
-    (parsedArgs ++ defaults.map(Some(_))).take(8).map(_.getOrElse(0))
+    (parsedArgs ++ defaults.map(Some(_))).take(9).map(_.getOrElse(0))
   val List(
     width,
     height,
     thunderPercentage,
+    stepsBetweenThunder,
     fireTree,
     fireGrass,
     windEnabled,
@@ -35,15 +36,23 @@ object Main extends App {
 
   // Tuple is: (thunder, windAngle, windStrength, windEnabled)
   def loadControlState(
-      defaults: (Int, Int, Int, Boolean)
-  ): (Int, Int, Int, Boolean, Boolean, Boolean) = {
-    val (defaultThunder, defaultAngle, defaultStrength, defaultEnabled) =
-      defaults
+      defaults: (Int, Int, Int, Int, Boolean)
+  ): (Int, Int, Int, Int, Boolean, Boolean, Boolean) = {
+    val (
+      defaultThunder,
+      defaultStepsBetweenThunder,
+      defaultAngle,
+      defaultStrength,
+      defaultEnabled
+    ) = defaults
     val controlJson = Try(
       Json.parse(Source.fromFile("res/sim_control.json").mkString)
     ).getOrElse(Json.obj())
     (
       (controlJson \ "thunderPercentage").asOpt[Int].getOrElse(defaultThunder),
+      (controlJson \ "stepsBetweenThunder")
+        .asOpt[Int]
+        .getOrElse(defaultStepsBetweenThunder),
       (controlJson \ "windAngle").asOpt[Int].getOrElse(defaultAngle),
       (controlJson \ "windStrength").asOpt[Int].getOrElse(defaultStrength),
       (controlJson \ "windEnabled").asOpt[Boolean].getOrElse(defaultEnabled),
@@ -66,15 +75,32 @@ object Main extends App {
       grid: Grid,
       out: FileWriter,
       lastStepSeen: Boolean,
-      defaultControl: (Int, Int, Int, Boolean)
+      defaultControl: (Int, Int, Int, Int, Boolean),
+      stepNum: Int = 0
   ): Unit = {
-    val (thunderPct, windAngle, windStrength, windEnabled, paused, step) =
-      loadControlState(defaultControl)
+    val (
+      thunderPct,
+      stepsBetweenThunder,
+      windAngle,
+      windStrength,
+      windEnabled,
+      paused,
+      step
+    ) = loadControlState(defaultControl)
     val doStep = step && !lastStepSeen
+
+    val doThunder =
+      stepsBetweenThunder > 0 && (stepNum % stepsBetweenThunder == 0)
 
     if (!paused || doStep) {
       val nextGrid =
-        grid.nextStep(thunderPct, windEnabled, windAngle, windStrength)
+        grid.nextStep(
+          thunderPct,
+          windEnabled,
+          windAngle,
+          windStrength,
+          doThunder
+        )
       writeFrame(out, nextGrid)
 
       if (doStep) {
@@ -89,11 +115,22 @@ object Main extends App {
       }
 
       if (!RUN_FAST) Thread.sleep(100)
-      loop(nextGrid, out, step, defaultControl)
+      loop(
+        nextGrid,
+        out,
+        step,
+        defaultControl,
+        stepNum + 1
+      )
     } else {
-
       if (!RUN_FAST) Thread.sleep(20)
-      loop(grid, out, lastStepSeen, defaultControl)
+      loop(
+        grid,
+        out,
+        lastStepSeen,
+        defaultControl,
+        stepNum
+      )
     }
   }
 
@@ -109,6 +146,7 @@ object Main extends App {
       lastStepSeen = false,
       (
         thunderPercentage, // Int
+        stepsBetweenThunder, // Int
         windAngle, // Int
         windStrength, // Int
         windEnabled == 1 // Boolean
