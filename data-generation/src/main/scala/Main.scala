@@ -5,9 +5,13 @@ import play.api.libs.json._
 import scala.io.Source
 
 object Main extends App {
+  // If true, runs the simulation at max speed (no sleep); if false, adds delay between steps
   val RUN_FAST = false
 
+  // Default parameters for simulation: width, height, thunder %, thunder freq, burning trees, burning grass, wind enabled, wind angle, wind strength
   val defaults = List(20, 20, 0, 1, 5, 10, 0, 0, 1)
+
+  // Parse arguments, using defaults for any not provided (max 9 expected params)
   val parsedArgs = args.dropWhile(_ == "--").map(_.toIntOption).toList
   val finalArgs =
     (parsedArgs ++ defaults.map(Some(_))).take(9).map(_.getOrElse(0))
@@ -23,18 +27,26 @@ object Main extends App {
     windStrength
   ) = finalArgs
 
-  // ==== FIXED RNG SEED (set here) ====
+  // ====== RANDOM NUMBER GENERATOR ======
+  // Uncomment the next two lines for deterministic simulation runs
   // val rngSeed = 42
   // val rand = new Random(rngSeed)
+
   val rand = new Random()
-  def writeInitialFiles(grid: Grid): Unit =
+
+  /** Writes initial simulation file with metadata and first grid state */
+  def writeInitialFiles(grid: Grid): Unit = {
     Using.resource(new PrintWriter("res/simulation_stream.ndjson")) { out =>
       val metadata = Json.obj("width" -> width, "height" -> height)
       out.println(Json.stringify(metadata))
       out.println(Json.stringify(Json.toJson(grid.encodeCells)))
     }
+  }
 
-  // Tuple is: (thunder, windAngle, windStrength, windEnabled)
+  /** Loads control state from the control JSON (written by frontend). Returns
+    * (thunder %, stepsBetweenThunder, windAngle, windStrength, windEnabled,
+    * paused, step).
+    */
   def loadControlState(
       defaults: (Int, Int, Int, Int, Boolean)
   ): (Int, Int, Int, Int, Boolean, Boolean, Boolean) = {
@@ -61,16 +73,25 @@ object Main extends App {
     )
   }
 
+  /** Appends a simulation frame (grid) to the NDJSON file */
   def writeFrame(out: FileWriter, grid: Grid): Unit = {
     out.write(Json.stringify(Json.toJson(grid.encodeCells)) + "\n")
     out.flush()
   }
 
-  def updateControlJson(controlJson: JsObject): Unit =
+  /** Updates sim_control.json with new values (used to unset "step" after
+    * one-step-advance)
+    */
+  def updateControlJson(controlJson: JsObject): Unit = {
     Using.resource(new PrintWriter("res/sim_control.json")) { writer =>
       writer.println(Json.prettyPrint(controlJson))
     }
+  }
 
+  /** Main simulation loop: advances the simulation and writes frames.
+    *   - Pauses if the user requests
+    *   - Handles single-step advance ("step") and thunder events
+    */
   def loop(
       grid: Grid,
       out: FileWriter,
@@ -105,6 +126,7 @@ object Main extends App {
         )
       writeFrame(out, nextGrid)
 
+      // After a single-step advance, immediately unset the "step" flag
       if (doStep) {
         val controlJson = Try(
           Json.parse(Source.fromFile("res/sim_control.json").mkString)
@@ -136,22 +158,28 @@ object Main extends App {
     }
   }
 
+  // ─────────────────── Entrypoint ─────────────────── //
+
+  // Generate the initial simulation grid
   val initialGrid =
     Grid(width, height, rand).igniteRandomFires(fireTree, fireGrass)
+
+  // Write the first frame and metadata to file
   writeInitialFiles(initialGrid)
 
   if (!RUN_FAST) Thread.sleep(100)
+  // Open the NDJSON file for appending and run the main simulation loop
   Using.resource(new FileWriter("res/simulation_stream.ndjson", true)) { out =>
     loop(
       initialGrid,
       out,
       lastStepSeen = false,
       (
-        thunderPercentage, // Int
-        stepsBetweenThunder, // Int
-        windAngle, // Int
-        windStrength, // Int
-        windEnabled == 1 // Boolean
+        thunderPercentage,
+        stepsBetweenThunder,
+        windAngle,
+        windStrength,
+        windEnabled == 1 // expects Boolean
       )
     )
   }

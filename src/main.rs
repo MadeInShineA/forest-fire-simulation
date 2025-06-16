@@ -1,7 +1,6 @@
+////────────────────────────────── Imports ──────────────────────────────//
 use bevy::input::mouse::{MouseMotion, MouseWheel};
-
 use bevy::input::ButtonInput;
-use bevy::math::primitives::{Cuboid, Cylinder, Sphere};
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 use crossbeam_channel::{unbounded, Receiver, Sender};
@@ -10,157 +9,23 @@ use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watche
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Seek, SeekFrom};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use std::{path::Path, sync::mpsc::channel, thread};
-
 use sysinfo::{ProcessRefreshKind, RefreshKind, Signal, System};
 
-//──────────────────── Resources & Data Types ──────────────────────//
+//────────────────────────────── Constants ──────────────────────────────//
+const CONTROL_PATH: &str = "res/sim_control.json";
 
-fn kill_simulation_processes() {
-    let mut sys = System::new_with_specifics(
-        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
-    );
-    sys.refresh_processes();
-
-    let mut killed_any = false;
-    for process in sys.processes().values() {
-        let cmdline = process.cmd().join(" ");
-        let exe = process
-            .exe()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
-        let matches = (exe.contains("java") || cmdline.contains("java"))
-            && (cmdline.contains("data-generation") && cmdline.contains(".jar"));
-        if matches {
-            println!("Killing process {}: {}", process.pid(), cmdline);
-            let _ = process.kill_with(Signal::Kill);
-            killed_any = true;
-        }
-    }
-    if killed_any {
-        println!("All simulation processes killed.");
-    }
-}
-
-// Kills on drop for normal exit
-struct KillOnDrop;
-impl Drop for KillOnDrop {
-    fn drop(&mut self) {
-        eprintln!("Exiting (Drop): Killing simulation processes...");
-        kill_simulation_processes();
-    }
-}
-
-#[derive(Resource)]
-struct FsWatcher(pub notify::RecommendedWatcher);
-
-enum SimulationFrameMsg {
-    Metadata { width: usize, height: usize },
-    Frame(Vec<Vec<String>>),
-    SimulationEnded,
-}
-
-#[derive(Resource)]
-struct NdjsonChannel(pub Receiver<SimulationFrameMsg>);
-
-#[derive(Resource)]
-struct Simulation {
-    frames: Vec<Vec<Vec<String>>>,
-    current: usize,
-    width: usize,
-    height: usize,
-}
-
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub enum SimAssetType {
-    GrowingTree1,
-    BurningGrowingTree1,
-    GrowingTree2,
-    BurningGrowingTree2_1,
-    BurningGrowingTree2_2,
-    Tree,
-    BurningTree1,
-    BurningTree2,
-    BurningTree3,
-    BurnedTree,
-    Grass,
-    BurningGrass,
-    BurnedGrass,
-    Water,
-    Thunder,
-    // ...add others as needed
-}
-
-impl SimAssetType {
-    pub fn asset_path(&self) -> &'static str {
-        match self {
-            SimAssetType::GrowingTree1 => "growing-tree1.glb#Scene0",
-            SimAssetType::BurningGrowingTree1 => "burning-growing-tree1.glb#Scene0",
-            SimAssetType::GrowingTree2 => "growing-tree2.glb#Scene0",
-            SimAssetType::BurningGrowingTree2_1 => "burning-growing-tree2-1.glb#Scene0",
-            SimAssetType::BurningGrowingTree2_2 => "burning-growing-tree2-2.glb#Scene0",
-            SimAssetType::Tree => "tree.glb#Scene0",
-            SimAssetType::BurningTree1 => "burning-tree1.glb#Scene0",
-            SimAssetType::BurningTree2 => "burning-tree2.glb#Scene0",
-            SimAssetType::BurningTree3 => "burning-tree3.glb#Scene0",
-
-            SimAssetType::BurnedTree => "burned-tree.glb#Scene0",
-
-            SimAssetType::Grass => "grass.glb#Scene0",
-            SimAssetType::BurningGrass => "burning-grass.glb#Scene0",
-            SimAssetType::BurnedGrass => "burned-grass.glb#Scene0",
-            SimAssetType::Water => "water.glb#Scene0",
-            SimAssetType::Thunder => "thunder.glb#Scene0",
-        }
-    }
-}
+//────────────────────────────── Data Structures & Resources ──────────────────────────────//
 
 #[derive(Resource, Default)]
 pub struct SimAssetHandles {
     pub scenes: HashMap<SimAssetType, Handle<Scene>>,
 }
-
-#[derive(Resource, Default)]
-struct FrameTimer(Timer);
-
-#[derive(Resource, Default, Clone)]
-struct SimulationParams {
-    width: u32,
-    height: u32,
-    thunder_percentage: u32,
-    steps_between_thunder: u32,
-
-    burning_trees: u32,
-    burning_grasses: u32,
-    is_wind_toggled: bool,
-    wind_angle: u32,
-    wind_strength: u32,
-    trigger_simulation: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, Default, Clone)]
-pub struct SimControl {
-    #[serde(rename = "thunderPercentage")]
-    pub thunder_percentage: Option<u32>,
-    #[serde(rename = "stepsBetweenThunder")]
-    pub steps_between_thunder: Option<u32>,
-    #[serde(rename = "windAngle")]
-    pub wind_angle: Option<i32>,
-    #[serde(rename = "windStrength")]
-    pub wind_strength: Option<i32>,
-    #[serde(rename = "windEnabled")]
-    pub wind_enabled: Option<bool>,
-    pub paused: Option<bool>,
-    pub step: Option<bool>,
-}
-
-const CONTROL_PATH: &str = "res/sim_control.json";
-
 #[derive(Resource, Default)]
 struct PlaybackControl {
     paused: bool,
@@ -169,7 +34,17 @@ struct PlaybackControl {
     speed: f32,
     jump_to_frame: Option<usize>,
 }
-
+#[derive(Resource)]
+struct NdjsonChannel(pub Receiver<SimulationFrameMsg>);
+#[derive(Resource)]
+struct FsWatcher(pub RecommendedWatcher);
+#[derive(Resource)]
+struct Simulation {
+    frames: Vec<Vec<Vec<String>>>,
+    current: usize,
+    width: usize,
+    height: usize,
+}
 #[derive(Resource, Clone)]
 struct SimulationStats {
     pub frame_counter: usize,
@@ -203,21 +78,38 @@ impl SimulationStats {
         }
     }
 }
-
-#[derive(Component)]
-struct CellEntity;
-#[derive(Component)]
-struct MainCamera;
-#[derive(Component)]
-struct SimulationEntity;
-#[derive(Component)]
-struct FlyCamera;
+#[derive(Resource, Default)]
+struct FrameTimer(Timer);
+#[derive(Resource, Default, Clone)]
+struct SimulationParams {
+    width: u32,
+    height: u32,
+    thunder_percentage: u32,
+    steps_between_thunder: u32,
+    burning_trees: u32,
+    burning_grasses: u32,
+    is_wind_toggled: bool,
+    wind_angle: u32,
+    wind_strength: u32,
+    trigger_simulation: bool,
+}
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct SimControl {
+    #[serde(rename = "thunderPercentage")]
+    pub thunder_percentage: Option<u32>,
+    #[serde(rename = "stepsBetweenThunder")]
+    pub steps_between_thunder: Option<u32>,
+    #[serde(rename = "windAngle")]
+    pub wind_angle: Option<i32>,
+    #[serde(rename = "windStrength")]
+    pub wind_strength: Option<i32>,
+    #[serde(rename = "windEnabled")]
+    pub wind_enabled: Option<bool>,
+    pub paused: Option<bool>,
+    pub step: Option<bool>,
+}
 #[derive(Resource, Default)]
 struct ShowGraphs(pub bool);
-#[derive(Resource, Default)]
-struct NdjsonTailingHandle(Option<thread::JoinHandle<()>>);
-#[derive(Resource, Default)]
-struct NdjsonKillSwitch(pub Arc<Mutex<bool>>);
 #[derive(Resource, Default)]
 struct LoadingTextTimer {
     timer: Timer,
@@ -225,21 +117,91 @@ struct LoadingTextTimer {
 }
 #[derive(Resource)]
 struct LoadingScreen(pub bool);
-
 #[derive(Deserialize)]
 struct FrameMeta {
     width: usize,
     height: usize,
 }
 
-//──────────────────── File Helpers ──────────────────────//
+//────────────────────────────── Simulation Cell Asset Types ──────────────────────────────//
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum SimAssetType {
+    GrowingTree1,
+    BurningGrowingTree1,
+    GrowingTree2,
+    BurningGrowingTree2_1,
+    BurningGrowingTree2_2,
+    Tree,
+    BurningTree1,
+    BurningTree2,
+    BurningTree3,
+    BurnedTree,
+    Grass,
+    BurningGrass,
+    BurnedGrass,
+    Water,
+    Thunder,
+}
+impl SimAssetType {
+    pub fn asset_path(&self) -> &'static str {
+        match self {
+            SimAssetType::GrowingTree1 => "growing-tree1.glb#Scene0",
+            SimAssetType::BurningGrowingTree1 => "burning-growing-tree1.glb#Scene0",
+            SimAssetType::GrowingTree2 => "growing-tree2.glb#Scene0",
+            SimAssetType::BurningGrowingTree2_1 => "burning-growing-tree2-1.glb#Scene0",
+            SimAssetType::BurningGrowingTree2_2 => "burning-growing-tree2-2.glb#Scene0",
+            SimAssetType::Tree => "tree.glb#Scene0",
+            SimAssetType::BurningTree1 => "burning-tree1.glb#Scene0",
+            SimAssetType::BurningTree2 => "burning-tree2.glb#Scene0",
+            SimAssetType::BurningTree3 => "burning-tree3.glb#Scene0",
+            SimAssetType::BurnedTree => "burned-tree.glb#Scene0",
+            SimAssetType::Grass => "grass.glb#Scene0",
+            SimAssetType::BurningGrass => "burning-grass.glb#Scene0",
+            SimAssetType::BurnedGrass => "burned-grass.glb#Scene0",
+            SimAssetType::Water => "water.glb#Scene0",
+            SimAssetType::Thunder => "thunder.glb#Scene0",
+        }
+    }
+}
+
+//────────────────────────────── Simulation Process Management ──────────────────────────────//
+
+/// Kills all running simulation processes (Java JARs with "data-generation")
+fn kill_simulation_processes() {
+    let mut sys = System::new_with_specifics(
+        RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+    );
+    sys.refresh_processes();
+    for process in sys.processes().values() {
+        let cmdline = process.cmd().join(" ");
+        let exe = process
+            .exe()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        if (exe.contains("java") || cmdline.contains("java"))
+            && (cmdline.contains("data-generation") && cmdline.contains(".jar"))
+        {
+            println!("Killing process {}: {}", process.pid(), cmdline);
+            let _ = process.kill_with(Signal::Kill);
+        }
+    }
+}
+// Kills sim processes on normal exit
+struct KillOnDrop;
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        eprintln!("Exiting (Drop): Killing simulation processes...");
+        kill_simulation_processes();
+    }
+}
+
+//────────────────────────────── File/Control Helpers ──────────────────────────────//
 
 fn read_sim_control() -> SimControl {
-    if let Ok(content) = fs::read_to_string(CONTROL_PATH) {
-        serde_json::from_str(&content).unwrap_or_default()
-    } else {
-        SimControl::default()
-    }
+    fs::read_to_string(CONTROL_PATH)
+        .ok()
+        .and_then(|content| serde_json::from_str(&content).ok())
+        .unwrap_or_default()
 }
 fn update_sim_control(update: SimControl) {
     let mut control = read_sim_control();
@@ -265,15 +227,18 @@ fn update_sim_control(update: SimControl) {
     let json = serde_json::to_string_pretty(&control).unwrap();
     fs::write(CONTROL_PATH, json).expect("Failed to write sim_control.json");
 }
-//──────────────────── NDJSON File Watcher ──────────────────────//
 
+//────────────────────────────── NDJSON Tailing/Watcher ──────────────────────────────//
+
+enum SimulationFrameMsg {
+    Metadata { width: usize, height: usize },
+    Frame(Vec<Vec<String>>),
+    SimulationEnded,
+}
 fn spawn_ndjson_tailer(
     tx: Sender<SimulationFrameMsg>,
     path: &str,
 ) -> notify::Result<RecommendedWatcher> {
-    use std::fs::File;
-    use std::io::{BufRead, BufReader, Seek, SeekFrom};
-
     let parent = Path::new(path).parent().expect("res directory must exist");
     let (tx_fs, rx_fs) = channel::<notify::Result<Event>>();
     let mut watcher = RecommendedWatcher::new(
@@ -286,30 +251,27 @@ fn spawn_ndjson_tailer(
 
     let path_buf = Path::new(path).to_path_buf();
     thread::spawn(move || {
-        // Wait until file exists
+        // Wait for file to exist, then open for reading
         let file = loop {
-            match File::open(&path_buf) {
-                Ok(f) => break f,
-                Err(_) => thread::sleep(Duration::from_millis(50)),
+            if let Ok(f) = fs::File::open(&path_buf) {
+                break f;
             }
+            thread::sleep(Duration::from_millis(50));
         };
         let mut reader = BufReader::new(file.try_clone().unwrap());
         let mut position = 0u64;
         let mut line = String::new();
 
-        // --- Read metadata ---
+        // Read metadata line
         let meta = loop {
             line.clear();
             if reader.read_line(&mut line).unwrap() > 0 {
                 let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
                 position += line.len() as u64;
-                if let Ok(m) = serde_json::from_str::<FrameMeta>(trimmed) {
-                    break m;
-                } else {
-                    eprintln!("spawn_ndjson_tailer: first line not metadata, retrying");
+                if !trimmed.is_empty() {
+                    if let Ok(m) = serde_json::from_str::<FrameMeta>(trimmed) {
+                        break m;
+                    }
                 }
             }
             thread::sleep(Duration::from_millis(10));
@@ -319,25 +281,23 @@ fn spawn_ndjson_tailer(
             height: meta.height,
         });
 
-        // --- Read ALL existing frames ---
+        // Read all frames already written
         loop {
             line.clear();
             let n = reader.read_line(&mut line).unwrap();
             if n == 0 {
-                break; // EOF
+                break;
             }
             position += n as u64;
             let trimmed = line.trim();
             if !trimmed.is_empty() {
                 if let Ok(frame) = serde_json::from_str::<Vec<Vec<String>>>(trimmed) {
                     let _ = tx.send(SimulationFrameMsg::Frame(frame));
-                } else {
-                    eprintln!("spawn_ndjson_tailer: bad frame, skipping: {trimmed}");
                 }
             }
         }
 
-        // --- Tail further frames ---
+        // Tail further frames as they are written
         while let Ok(res_event) = rx_fs.recv() {
             if let Ok(event) = res_event {
                 if matches!(event.kind, EventKind::Modify(_)) {
@@ -351,8 +311,6 @@ fn spawn_ndjson_tailer(
                         if !trimmed.is_empty() {
                             if let Ok(frame) = serde_json::from_str::<Vec<Vec<String>>>(trimmed) {
                                 let _ = tx.send(SimulationFrameMsg::Frame(frame));
-                            } else {
-                                eprintln!("spawn_ndjson_tailer: bad frame, skipping: {trimmed}");
                             }
                         }
                         line.clear();
@@ -362,11 +320,10 @@ fn spawn_ndjson_tailer(
         }
         let _ = tx.send(SimulationFrameMsg::SimulationEnded);
     });
-
     Ok(watcher)
 }
 
-//──────────────────── Asset Setup ──────────────────────//
+//────────────────────────────── Asset/Scene Setup ──────────────────────────────//
 
 fn setup_sim_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut scenes = HashMap::new();
@@ -381,20 +338,17 @@ fn setup_sim_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
         SimAssetType::BurningTree2,
         SimAssetType::BurningTree3,
         SimAssetType::BurnedTree,
-        // SimAssetType::BurningTree,
         SimAssetType::Grass,
         SimAssetType::BurningGrass,
         SimAssetType::BurnedGrass,
-        // SimAssetType::Ash,
         SimAssetType::Water,
-        SimAssetType::Thunder, // add more if needed
+        SimAssetType::Thunder,
     ] {
         let handle = asset_server.load(asset_type.asset_path());
         scenes.insert(asset_type, handle);
     }
     commands.insert_resource(SimAssetHandles { scenes });
 }
-
 fn spawn_sim_asset(
     commands: &mut Commands,
     handles: &SimAssetHandles,
@@ -402,7 +356,6 @@ fn spawn_sim_asset(
     pos: Vec3,
 ) {
     const SCALE: f32 = 20.0;
-
     if let Some(scene) = handles.scenes.get(&asset_type) {
         commands.spawn((
             SceneBundle {
@@ -417,15 +370,20 @@ fn spawn_sim_asset(
             CellEntity,
             SimulationEntity,
         ));
-    } else {
-        eprintln!("Sim asset {:?} not loaded!", asset_type);
     }
 }
 
-//──────────────────── Kind/Spawn helpers ──────────────────────//
+//────────────────────────────── Component Markers ──────────────────────────────//
+#[derive(Component)]
+struct CellEntity;
+#[derive(Component)]
+struct MainCamera;
+#[derive(Component)]
+struct SimulationEntity;
+#[derive(Component)]
+struct FlyCamera;
 
-//──────────────────── Scene Spawner ──────────────────────//
-
+//────────────────────────────── Scene and Light Spawner ──────────────────────────────//
 fn spawn_scene(commands: &mut Commands) {
     commands.spawn((
         Camera3dBundle {
@@ -467,8 +425,9 @@ fn spawn_scene(commands: &mut Commands) {
     });
 }
 
-//──────────────────── Systems: Simulation logic ──────────────────────//
+//────────────────────────────── SYSTEMS: Simulation Logic ──────────────────────────────//
 
+/// Launches simulation process and starts NDJSON tailer on "Start Simulation"
 fn start_simulation_button_system(
     mut params: ResMut<SimulationParams>,
     mut commands: Commands,
@@ -560,6 +519,7 @@ fn start_simulation_button_system(
     });
 }
 
+/// Handles incoming NDJSON simulation events, updates stats and Simulation resource
 fn simulation_update_system(
     mut commands: Commands,
     ndjson: Res<NdjsonChannel>,
@@ -573,20 +533,7 @@ fn simulation_update_system(
         match msg {
             SimulationFrameMsg::Metadata { width, height } => {
                 // Reset stats for a new run!
-                *stats = SimulationStats {
-                    frame_counter: 0,
-                    trees_over_time: vec![],
-                    burning_trees_over_time: vec![],
-                    tree_ashes_over_time: vec![],
-                    grasses_over_time: vec![],
-                    burning_grasses_over_time: vec![],
-                    grass_ashes_over_time: vec![],
-                    saplings_over_time: vec![],
-                    burning_saplings_over_time: vec![],
-                    young_trees_over_time: vec![],
-                    burning_young_trees_over_time: vec![],
-                    thunder_over_time: vec![],
-                };
+                *stats = SimulationStats::new_empty();
                 commands.insert_resource(Simulation {
                     frames: Vec::new(),
                     current: 0,
@@ -609,7 +556,7 @@ fn simulation_update_system(
                 let mut burning_saplings = 0;
                 let mut young_trees = 0;
                 let mut burning_young_trees = 0;
-                let mut thunder = 0; // <--- NEW
+                let mut thunder = 0;
 
                 for row in &frame {
                     for cell in row {
@@ -624,7 +571,7 @@ fn simulation_update_system(
                             "G" => grasses += 1,
                             "+" => burning_grasses += 1,
                             "-" => grass_ashes += 1,
-                            "TH" => thunder += 1, // <-- NEW
+                            "TH" => thunder += 1,
                             _ => {}
                         }
                     }
@@ -641,7 +588,7 @@ fn simulation_update_system(
                 stats
                     .burning_young_trees_over_time
                     .push(burning_young_trees);
-                stats.thunder_over_time.push(thunder); // <-- NEW
+                stats.thunder_over_time.push(thunder);
 
                 stats.frame_counter = stats.trees_over_time.len();
 
@@ -658,7 +605,6 @@ fn simulation_update_system(
                         height,
                     });
                 }
-
                 // Loading logic: leave loading as soon as we have any frames
                 if let Some(ref sim) = sim {
                     if sim.frames.len() >= 1 && loading.0 {
@@ -674,6 +620,7 @@ fn simulation_update_system(
     }
 }
 
+/// Frame advancing: spawns cells for current frame
 fn advance_frame_system(
     mut commands: Commands,
     time: Res<Time>,
@@ -755,64 +702,35 @@ fn advance_frame_system(
                 offset_z + (height - 1 - iy) as f32 * cell_size * spacing,
             );
             match cell.as_str() {
-                "T" => {
-                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::Tree, pos);
-                }
-                "A" => {
-                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurnedTree, pos);
-                }
-                "G" => {
-                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::Grass, pos);
-                }
-                "+" => {
-                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurningGrass, pos);
-                }
-                "-" => {
-                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurnedGrass, pos);
-                }
-                "W" => {
-                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::Water, pos);
-                }
-                "*" => {
-                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurningTree1, pos);
-                }
-                "**" => {
-                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurningTree2, pos);
-                }
-                "***" => {
-                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurningTree3, pos);
-                }
-
-                "s" => {
-                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::GrowingTree1, pos);
-                }
-                "!" => {
-                    spawn_sim_asset(
-                        &mut commands,
-                        &scenes,
-                        SimAssetType::BurningGrowingTree1,
-                        pos,
-                    );
-                }
-                "y" => {
-                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::GrowingTree2, pos);
-                }
-                "&" => {
-                    spawn_sim_asset(
-                        &mut commands,
-                        &scenes,
-                        SimAssetType::BurningGrowingTree2_1,
-                        pos,
-                    );
-                }
-                "@" => {
-                    spawn_sim_asset(
-                        &mut commands,
-                        &scenes,
-                        SimAssetType::BurningGrowingTree2_2,
-                        pos,
-                    );
-                }
+                "T" => spawn_sim_asset(&mut commands, &scenes, SimAssetType::Tree, pos),
+                "A" => spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurnedTree, pos),
+                "G" => spawn_sim_asset(&mut commands, &scenes, SimAssetType::Grass, pos),
+                "+" => spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurningGrass, pos),
+                "-" => spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurnedGrass, pos),
+                "W" => spawn_sim_asset(&mut commands, &scenes, SimAssetType::Water, pos),
+                "*" => spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurningTree1, pos),
+                "**" => spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurningTree2, pos),
+                "***" => spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurningTree3, pos),
+                "s" => spawn_sim_asset(&mut commands, &scenes, SimAssetType::GrowingTree1, pos),
+                "!" => spawn_sim_asset(
+                    &mut commands,
+                    &scenes,
+                    SimAssetType::BurningGrowingTree1,
+                    pos,
+                ),
+                "y" => spawn_sim_asset(&mut commands, &scenes, SimAssetType::GrowingTree2, pos),
+                "&" => spawn_sim_asset(
+                    &mut commands,
+                    &scenes,
+                    SimAssetType::BurningGrowingTree2_1,
+                    pos,
+                ),
+                "@" => spawn_sim_asset(
+                    &mut commands,
+                    &scenes,
+                    SimAssetType::BurningGrowingTree2_2,
+                    pos,
+                ),
                 "TH" => {
                     spawn_sim_asset(&mut commands, &scenes, SimAssetType::Thunder, pos);
                     spawn_sim_asset(&mut commands, &scenes, SimAssetType::Tree, pos);
@@ -823,8 +741,9 @@ fn advance_frame_system(
     }
 }
 
-//──────────────────── Systems: Camera, Pause, UI ──────────────────────//
+//────────────────────────────── SYSTEMS: Camera, Pause, UI ──────────────────────────────//
 
+/// WASD+mouse 3D camera fly system
 fn camera_movement_system(
     mut contexts: EguiContexts,
     time: Res<Time>,
@@ -835,7 +754,7 @@ fn camera_movement_system(
     mut query: Query<&mut Transform, With<FlyCamera>>,
 ) {
     let ctx = contexts.ctx_mut();
-    if ctx.wants_pointer_input() || ctx.wants_pointer_input() {
+    if ctx.wants_pointer_input() {
         return;
     }
     let mut transform = match query.get_single_mut() {
@@ -883,6 +802,7 @@ fn camera_movement_system(
     }
 }
 
+/// Spacebar toggles pause/play
 fn space_pause_resume_system(
     keys: Res<ButtonInput<KeyCode>>,
     mut playback: ResMut<PlaybackControl>,
@@ -896,6 +816,7 @@ fn space_pause_resume_system(
     }
 }
 
+/// Helper: click on a plot to jump playback to that frame
 fn handle_plot_click<R>(
     response: &egui_plot::PlotResponse<R>,
     playback: &mut PlaybackControl,
@@ -915,6 +836,7 @@ fn handle_plot_click<R>(
     }
 }
 
+/// egui sidebar, playback controls, graphs, wind indicator, and loading screen
 fn ui_system(
     mut contexts: EguiContexts,
     mut params: ResMut<SimulationParams>,
@@ -1341,17 +1263,10 @@ fn ui_system(
     }
 }
 
-//──────────────────── App Entrypoint ──────────────────────//
+//────────────────────────────── App Entrypoint ──────────────────────────────//
 
 fn main() {
-    use bevy::prelude::*;
-    use crossbeam_channel::unbounded;
-    use std::sync::Mutex;
-    // (Insert other necessary use/imports here!)
-
-    // Prevent double cleanup
     let cleaned_up = Arc::new(AtomicBool::new(false));
-
     // ---- PANIC hook ----
     {
         let cleaned_up = cleaned_up.clone();
@@ -1363,7 +1278,6 @@ fn main() {
             eprintln!("Process killed. Info: {info}");
         }));
     }
-
     // ---- SIGINT/Ctrl+C ----
     {
         let cleaned_up = cleaned_up.clone();
@@ -1376,12 +1290,8 @@ fn main() {
         })
         .expect("Error setting Ctrl+C handler");
     }
-
-    // ---- Drop guard for normal exit ----
     let _guard = KillOnDrop;
 
-    // ---- Your Bevy/Egui App Starts Here ----
-    let kill_switch = Arc::new(Mutex::new(false));
     let (_tx, rx) = unbounded::<SimulationFrameMsg>();
 
     App::new()
@@ -1411,8 +1321,6 @@ fn main() {
         .insert_resource(SimulationStats::new_empty())
         .insert_resource(ShowGraphs(false))
         .insert_resource(NdjsonChannel(rx))
-        .insert_resource(NdjsonTailingHandle(None))
-        .insert_resource(NdjsonKillSwitch(kill_switch.clone()))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "🔥 Forest Fire Simulation 3D".into(),
