@@ -68,7 +68,7 @@ https://github.com/user-attachments/assets/1629e383-d247-4556-a707-08dd01d942c2
 ---
 
 ## 🔥 Model Wind Strength Analysis
-![fire_metrics_vs_wind_strength_averaged](https://github.com/user-attachments/assets/0638e764-9f95-4c26-afdf-ec1a59790ad6)
+![image](https://github.com/user-attachments/assets/27a6d51d-10bf-4f65-a89f-a8e08e2a48c1)
 
 ### Wind Strength and Burn Severity
 
