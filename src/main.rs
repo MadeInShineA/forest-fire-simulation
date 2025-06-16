@@ -916,9 +916,6 @@ fn ui_system(
                 );
             }
             ui.horizontal(|ui| {
-                if ui.button("Start Simulation").clicked() {
-                    params.trigger_simulation = true;
-                }
                 if sim_ref.is_some() && ui.button("Update Thunder").clicked() {
                     update_sim_control(SimControl {
                         thunder_enabled: Some(params.is_thunder_toggled),
@@ -937,6 +934,10 @@ fn ui_system(
                     });
                 }
             });
+
+            if ui.button("Start Simulation").clicked() {
+                params.trigger_simulation = true;
+            }
 
             if let Some(sim) = sim_ref {
                 ui.separator();
