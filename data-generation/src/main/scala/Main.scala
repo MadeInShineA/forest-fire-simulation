@@ -6,7 +6,7 @@ import scala.io.Source
 
 object Main extends App {
   val RUN_FAST =
-    true // Used to generate data at max speed for the data visualization
+    false // Used to generate data at max speed for the data visualization
 
   // width, height, fireTree, fireGrass, thunderEnabled, thunderPercentage, stepsBetweenThunder , windEnabled, windAngle, windStrength
   val defaults = List(20, 20, 5, 10, 0, 1, 0, 0, 0, 1)
