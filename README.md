@@ -17,26 +17,35 @@ A scalable, cross-language forest fire simulation for research, visualization, a
 
 ### Simulation Screenshot
 
-![image](https://github.com/user-attachments/assets/a412cc62-50cf-497a-a08c-8e963d1b7fe8)
+![image](https://github.com/user-attachments/assets/ddc16b5c-2091-49d3-a7bb-b463b98525d1)
   
 *An example snapshot of the forest fire simulation in progress.*
 
 ---
 
-### Fire Spread Graph
+### Simulation Graphs
 
-![image](https://github.com/user-attachments/assets/47fb803e-2d41-4bcf-b321-e7faa7e38053)
+![image](https://github.com/user-attachments/assets/576d7dda-55ae-4503-ab1f-0c6c12347b1e)
 
 *Graphs showing tree states, grass trees, and other simulation statistics over time.*
 
 ---
 
+
+
 ### Animated Simulation GIF
 
-![Simulation Animation](https://github.com/user-attachments/assets/820da1c1-98a1-4be0-a133-a01602e2edf5)
 
 
-*An animated GIF demonstrating the forest fire spreading across the landscape and the graphs generating simultaneously.*
+
+https://github.com/user-attachments/assets/a2591d31-9412-4a23-a564-7f9bc44039b6
+
+
+
+
+
+
+*An animated GIF demonstrating the simulation visualization*
 
 ---
 
