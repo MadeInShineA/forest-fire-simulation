@@ -51,7 +51,8 @@ Regrowth, ignition probabilities, fire jump (“spotting”), and wind amplifica
 ### Animated Simulation
 
 
-https://github.com/user-attachments/assets/9b3da078-17f2-4bf9-8a95-e5d8db81d70b
+
+https://github.com/user-attachments/assets/1629e383-d247-4556-a707-08dd01d942c2
 
 
 
