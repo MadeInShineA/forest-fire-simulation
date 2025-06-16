@@ -148,7 +148,7 @@ To reproduce the wind strength analysis and generate summary plots:
    cd data-visualization
    pip install -r requirements.txt
    ```
-3. ** Run the visualization python file **
+3. **Run the visualization python file**
    ```bash
    python main.py
    ```
