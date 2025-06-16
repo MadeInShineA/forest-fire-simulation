@@ -499,7 +499,7 @@ fn start_simulation_button_system(
         params.wind_angle.to_string(),
         params.wind_strength.to_string(),
     ];
-    let full_cmd = format!("sh run-sim-ndjson.sh {}", cmdline.join(" "));
+    let full_cmd = format!("sh run-sim.sh {}", cmdline.join(" "));
     std::thread::spawn(move || {
         let mut child = Command::new("sh")
             .arg("-c")

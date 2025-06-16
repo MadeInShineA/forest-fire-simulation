@@ -9,7 +9,7 @@ import psutil
 
 # === Constants ===
 PARENT_DIR = os.path.abspath("..")
-SIM_SCRIPT = "./run-sim-ndjson.sh"
+SIM_SCRIPT = "./run-sim.sh"
 SIM_FILE = os.path.join(PARENT_DIR, "res/simulation_stream.ndjson")
 SIM_CONTROL = os.path.join(PARENT_DIR, "res/sim_control.json")
 MAX_WIND_STRENGTH = 50
