@@ -36,8 +36,11 @@ struct PlaybackControl {
 }
 #[derive(Resource)]
 struct NdjsonChannel(pub Receiver<SimulationFrameMsg>);
+
+#[allow(dead_code)] // The struct is only used to keep the Watcher alive
 #[derive(Resource)]
 struct FsWatcher(pub RecommendedWatcher);
+
 #[derive(Resource)]
 struct Simulation {
     frames: Vec<Vec<Vec<String>>>,
@@ -460,7 +463,7 @@ fn start_simulation_button_system(
     ];
     let full_cmd = format!("sh run-sim.sh {}", cmdline.join(" "));
     std::thread::spawn(move || {
-        let mut child = Command::new("sh")
+        let child = Command::new("sh")
             .arg("-c")
             .arg(full_cmd)
             .stdout(Stdio::piped())
