@@ -5,20 +5,22 @@ import play.api.libs.json._
 import scala.io.Source
 
 object Main extends App {
-  val RUN_FAST = false
+  val RUN_FAST = true
 
-  // Default simulation params: width, height, thunder %, thunder freq, burning trees, burning grass, wind enabled, wind angle, wind strength
-  val defaults = List(20, 20, 0, 1, 5, 10, 0, 0, 1)
+  // width, height, fireTree, fireGrass, thunderEnabled, thunderPercentage, stepsBetweenThunder , windEnabled, windAngle, windStrength
+  val defaults = List(20, 20, 5, 10, 0, 1, 0, 0, 0, 1)
+
   val parsedArgs = args.dropWhile(_ == "--").map(_.toIntOption).toList
   val finalArgs =
-    (parsedArgs ++ defaults.map(Some(_))).take(9).map(_.getOrElse(0))
+    (parsedArgs ++ defaults.map(Some(_))).take(10).map(_.getOrElse(0))
   val List(
     width,
     height,
-    thunderPercentage,
-    stepsBetweenThunder,
     fireTree,
     fireGrass,
+    thunderEnabled,
+    thunderPercentage,
+    stepsBetweenThunder,
     windEnabled,
     windAngle,
     windStrength
@@ -35,14 +37,15 @@ object Main extends App {
   }
 
   def loadControlState(
-      defaults: (Int, Int, Int, Int, Boolean)
-  ): (Int, Int, Int, Int, Boolean, Boolean, Boolean) = {
+      defaults: (Int, Int, Boolean, Int, Int, Boolean)
+  ): (Int, Int, Boolean, Int, Int, Boolean, Boolean, Boolean) = {
     val (
       defaultThunder,
       defaultStepsBetweenThunder,
+      defaultThunderEnabled,
       defaultAngle,
       defaultStrength,
-      defaultEnabled
+      defaultWindEnabled
     ) = defaults
     val controlJson = Try(
       Json.parse(Source.fromFile("res/sim_control.json").mkString)
@@ -52,9 +55,14 @@ object Main extends App {
       (controlJson \ "stepsBetweenThunder")
         .asOpt[Int]
         .getOrElse(defaultStepsBetweenThunder),
+      (controlJson \ "thunderEnabled")
+        .asOpt[Boolean]
+        .getOrElse(defaultThunderEnabled),
       (controlJson \ "windAngle").asOpt[Int].getOrElse(defaultAngle),
       (controlJson \ "windStrength").asOpt[Int].getOrElse(defaultStrength),
-      (controlJson \ "windEnabled").asOpt[Boolean].getOrElse(defaultEnabled),
+      (controlJson \ "windEnabled")
+        .asOpt[Boolean]
+        .getOrElse(defaultWindEnabled),
       (controlJson \ "paused").asOpt[Boolean].getOrElse(false),
       (controlJson \ "step").asOpt[Boolean].getOrElse(false)
     )
@@ -71,20 +79,20 @@ object Main extends App {
     }
   }
 
-  // ---- Main loop with thunder timer logic ----
   def loop(
       grid: Grid,
       out: FileWriter,
       lastStepSeen: Boolean,
-      defaultControl: (Int, Int, Int, Int, Boolean),
+      defaultControl: (Int, Int, Boolean, Int, Int, Boolean),
       stepNum: Int = 0,
-      lastThunderSettings: (Int, Int) =
-        (thunderPercentage, stepsBetweenThunder),
+      lastThunderSettings: (Int, Int, Boolean) =
+        (thunderPercentage, stepsBetweenThunder, thunderEnabled == 1),
       thunderStepCounter: Int = 0
   ): Unit = {
     val (
       thunderPct,
       stepsBetweenThunderNow,
+      thunderEnabledNow,
       windAngle,
       windStrength,
       windEnabled,
@@ -94,42 +102,35 @@ object Main extends App {
     val doStep = step && !lastStepSeen
 
     val thunderParamsChanged =
-      (stepsBetweenThunderNow != lastThunderSettings._2)
+      (stepsBetweenThunderNow != lastThunderSettings._2) || (thunderEnabledNow != lastThunderSettings._3)
 
-    // No thunder on very first step!
     val isFirstStep = stepNum == 0
 
-    // Scheduled thunder: interval reached
     val scheduledThunder =
-      stepsBetweenThunderNow > 0 && thunderStepCounter >= stepsBetweenThunderNow
+      thunderEnabledNow && stepsBetweenThunderNow > 0 && thunderStepCounter >= stepsBetweenThunderNow
 
-    // If interval changed, compare timer: fire now if timer is already over the new interval
     val thunderOnIntervalChange =
-      thunderParamsChanged && thunderStepCounter >= stepsBetweenThunderNow && !isFirstStep
+      thunderEnabledNow && thunderParamsChanged && thunderStepCounter >= stepsBetweenThunderNow && !isFirstStep
 
     val doThunder =
       (!isFirstStep && (scheduledThunder || thunderOnIntervalChange))
 
-    // Update thunder timer: reset if thunder fires, else increment
     val nextThunderStepCounter =
       if (doThunder) 0
       else thunderStepCounter + 1
 
-    // When interval changes, and timer is LESS than new interval, just keep counting up until the new value is reached.
     val newLastThunderSettings =
       if (thunderParamsChanged && doThunder)
-        (thunderPct, stepsBetweenThunderNow)
+        (thunderPct, stepsBetweenThunderNow, thunderEnabledNow)
       else if (thunderParamsChanged)
-        (
-          thunderPct,
-          stepsBetweenThunderNow
-        ) // Even if not firing, keep the updated interval for future comparison
+        (thunderPct, stepsBetweenThunderNow, thunderEnabledNow)
       else
         lastThunderSettings
 
     if (!paused || doStep) {
       val nextGrid =
         grid.nextStep(
+          thunderEnabledNow,
           thunderPct,
           windEnabled,
           windAngle,
@@ -138,7 +139,6 @@ object Main extends App {
         )
       writeFrame(out, nextGrid)
 
-      // After a single-step advance, immediately unset the "step" flag
       if (doStep) {
         val controlJson = Try(
           Json.parse(Source.fromFile("res/sim_control.json").mkString)
@@ -162,6 +162,8 @@ object Main extends App {
       )
     } else {
       if (!RUN_FAST) Thread.sleep(20)
+      if (!RUN_FAST) Thread.sleep(20)
+      // The simulation must keep looping while paused, to see when paused changes
       loop(
         grid,
         out,
@@ -174,7 +176,6 @@ object Main extends App {
     }
   }
 
-  // ---- Entrypoint ----
   val initialGrid =
     Grid(width, height, rand).igniteRandomFires(fireTree, fireGrass)
   writeInitialFiles(initialGrid)
@@ -188,12 +189,13 @@ object Main extends App {
       (
         thunderPercentage,
         stepsBetweenThunder,
+        thunderEnabled == 1,
         windAngle,
         windStrength,
         windEnabled == 1
       ),
       0,
-      (thunderPercentage, stepsBetweenThunder),
+      (thunderPercentage, stepsBetweenThunder, thunderEnabled == 1),
       0
     )
   }

@@ -87,10 +87,11 @@ struct FrameTimer(Timer);
 struct SimulationParams {
     width: u32,
     height: u32,
-    thunder_percentage: u32,
-    steps_between_thunder: u32,
     burning_trees: u32,
     burning_grasses: u32,
+    is_thunder_toggled: bool,
+    thunder_percentage: u32,
+    steps_between_thunder: u32,
     is_wind_toggled: bool,
     wind_angle: u32,
     wind_strength: u32,
@@ -100,6 +101,8 @@ struct SimulationParams {
 pub struct SimControl {
     #[serde(rename = "thunderPercentage")]
     pub thunder_percentage: Option<u32>,
+    #[serde(rename = "thunderEnabled")]
+    pub thunder_enabled: Option<bool>,
     #[serde(rename = "stepsBetweenThunder")]
     pub steps_between_thunder: Option<u32>,
     #[serde(rename = "windAngle")]
@@ -208,6 +211,9 @@ fn read_sim_control() -> SimControl {
 }
 fn update_sim_control(update: SimControl) {
     let mut control = read_sim_control();
+    if let Some(val) = update.thunder_enabled {
+        control.thunder_enabled = Some(val);
+    }
     if let Some(val) = update.thunder_percentage {
         control.thunder_percentage = Some(val);
     }
@@ -453,10 +459,11 @@ fn start_simulation_button_system(
     let cmdline = vec![
         params.width.to_string(),
         params.height.to_string(),
-        params.thunder_percentage.to_string(),
-        params.steps_between_thunder.to_string(),
         params.burning_trees.to_string(),
         params.burning_grasses.to_string(),
+        (params.is_thunder_toggled as i32).to_string(),
+        params.thunder_percentage.to_string(),
+        params.steps_between_thunder.to_string(),
         (params.is_wind_toggled as i32).to_string(),
         params.wind_angle.to_string(),
         params.wind_strength.to_string(),
@@ -513,6 +520,7 @@ fn start_simulation_button_system(
 
     update_sim_control(SimControl {
         paused: Some(false),
+        thunder_enabled: Some(params.is_thunder_toggled),
         thunder_percentage: Some(params.thunder_percentage),
         steps_between_thunder: Some(params.steps_between_thunder),
         wind_enabled: Some(params.is_wind_toggled),
@@ -882,14 +890,20 @@ fn ui_system(
             ui.add(
                 egui::Slider::new(&mut params.burning_grasses, 0..=100).text("Burning grasses %"),
             );
-            ui.add(
-                egui::Slider::new(&mut params.thunder_percentage, 0..=100)
-                    .text("Thunder per step (%)"),
-            );
-            ui.add(
-                egui::Slider::new(&mut params.steps_between_thunder, 1..=100)
-                    .text("Steps between thunder"),
-            );
+            ui.add(egui::Checkbox::new(
+                &mut params.is_thunder_toggled,
+                "Enable thunder",
+            ));
+            if params.is_thunder_toggled {
+                ui.add(
+                    egui::Slider::new(&mut params.thunder_percentage, 0..=100)
+                        .text("Thunder per step (%)"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut params.steps_between_thunder, 1..=100)
+                        .text("Steps between thunder"),
+                );
+            }
 
             ui.add(egui::Checkbox::new(
                 &mut params.is_wind_toggled,
@@ -907,6 +921,7 @@ fn ui_system(
                 }
                 if sim_ref.is_some() && ui.button("Update Thunder").clicked() {
                     update_sim_control(SimControl {
+                        thunder_enabled: Some(params.is_thunder_toggled),
                         thunder_percentage: Some(params.thunder_percentage),
                         steps_between_thunder: Some(params.steps_between_thunder),
                         ..Default::default()
@@ -926,6 +941,7 @@ fn ui_system(
             if let Some(sim) = sim_ref {
                 ui.separator();
                 ui.label("Playback Controls");
+                ui.add(egui::Slider::new(&mut playback.speed, 0.05..=2.0).text("Speed s/frame"));
                 ui.horizontal(|ui| {
                     if ui.small_button("|⏮").clicked() {
                         playback.jump_to_frame = Some(0);
@@ -957,7 +973,6 @@ fn ui_system(
                         playback.jump_to_frame = Some(sim.frames.len().saturating_sub(1));
                     }
                 });
-                ui.add(egui::Slider::new(&mut playback.speed, 0.05..=2.0).text("Speed s/frame"));
                 ui.label(format!("Frame: {}/{}", sim.current + 1, sim.frames.len()));
                 let mut display_frame = sim.current + 1;
                 if ui
@@ -1312,7 +1327,8 @@ fn main() {
         .insert_resource(SimulationParams {
             width: 20,
             height: 20,
-            thunder_percentage: 0,
+            is_thunder_toggled: false,
+            thunder_percentage: 1,
             steps_between_thunder: 1,
             burning_trees: 5,
             burning_grasses: 10,

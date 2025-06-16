@@ -19,10 +19,11 @@ WIND_STRENGTH_STEP = 1
 GRID_WIDTH = 100
 GRID_HEIGHT = 100
 
-THUNDER_PCT = 0
-STEPS_BETWEEN_THUNDER = 1
 FIRE_TREE = 5
 FIRE_GRASS = 10
+THUNDER_ENABLED = False
+THUNDER_PCT = 0
+STEPS_BETWEEN_THUNDER = 1
 WIND_ENABLED = 1
 WIND_ANGLE = 0
 
@@ -96,10 +97,11 @@ for wind_strength in range(0, MAX_WIND_STRENGTH + 1, WIND_STRENGTH_STEP):
             SIM_SCRIPT,
             str(GRID_WIDTH),
             str(GRID_HEIGHT),
-            str(THUNDER_PCT),
-            str(STEPS_BETWEEN_THUNDER),
             str(FIRE_TREE),
             str(FIRE_GRASS),
+            str(THUNDER_ENABLED),
+            str(THUNDER_PCT),
+            str(STEPS_BETWEEN_THUNDER),
             str(WIND_ENABLED),
             str(WIND_ANGLE),
             str(wind_strength),
@@ -239,8 +241,8 @@ fig.text(
     (
         f"Each point is averaged over {REPEATS} simulation runs per wind strength.\n"
         f"Grid: {GRID_WIDTH}x{GRID_HEIGHT} | "
-        f"Thunder: {THUNDER_PCT}% every {STEPS_BETWEEN_THUNDER} steps | "
         f"Initial fire % (tree): {FIRE_TREE}, (grass): {FIRE_GRASS} | "
+        f"Thunder enabled: {THUNDER_ENABLED} | "
         f"Wind angle: {WIND_ANGLE}° | "
         f"Wind strengths: 0–{MAX_WIND_STRENGTH} (step {WIND_STRENGTH_STEP})"
     ),

@@ -303,6 +303,7 @@ case class Grid(
   /** Advances the grid by one step, applying fire, regrowth, thunder, and wind.
     */
   def nextStep(
+      enableThunder: Boolean,
       thunderPercentage: Int,
       enableWind: Boolean,
       windAngle: Int,
@@ -448,7 +449,7 @@ case class Grid(
       }
     }
     val updatedGrid = this.copy(cells = newCells, rand = this.rand)
-    if (doThunderThisStep)
+    if (doThunderThisStep && enableThunder)
       updatedGrid.strikeThunder(thunderPercentage)
     else
       updatedGrid
