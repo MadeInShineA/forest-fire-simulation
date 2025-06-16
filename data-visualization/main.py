@@ -3,6 +3,8 @@ import json
 import time
 import os
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
+import seaborn as sns
 import psutil
 
 # === Constants ===
@@ -18,6 +20,7 @@ GRID_WIDTH = 100
 GRID_HEIGHT = 100
 
 THUNDER_PCT = 0
+STEPS_BETWEEN_THUNDER = 1
 FIRE_TREE = 5
 FIRE_GRASS = 10
 WIND_ENABLED = 1
@@ -29,9 +32,7 @@ burned_symbols = {"A", "-"}
 
 wind_strengths = []
 max_burned_percents = []
-burn_durations = []
 final_burned_percents = []
-peak_fire_fronts = []
 
 
 def write_sim_control_json(
@@ -76,9 +77,7 @@ def kill_proc_tree(pid):
 for wind_strength in range(0, MAX_WIND_STRENGTH + 1, WIND_STRENGTH_STEP):
     print(f"\nWind strength: {wind_strength}/{MAX_WIND_STRENGTH}")
     total_burned = 0.0
-    total_duration = 0.0
     total_final_burned = 0.0
-    total_peak_front = 0.0
 
     for run in range(REPEATS):
         print(f"  Repeat {run + 1}/{REPEATS} ...", end="", flush=True)
@@ -98,6 +97,7 @@ for wind_strength in range(0, MAX_WIND_STRENGTH + 1, WIND_STRENGTH_STEP):
             str(GRID_WIDTH),
             str(GRID_HEIGHT),
             str(THUNDER_PCT),
+            str(STEPS_BETWEEN_THUNDER),
             str(FIRE_TREE),
             str(FIRE_GRASS),
             str(WIND_ENABLED),
@@ -175,47 +175,79 @@ for wind_strength in range(0, MAX_WIND_STRENGTH + 1, WIND_STRENGTH_STEP):
         kill_proc_tree(proc.pid)
 
         total_burned += max_percent_burned
-        total_duration += frame_counter
         total_final_burned += percent_burned
-        total_peak_front += peak_fire_front
         print(f" Done. Frames: {frame_counter}, Burned: {percent_burned:.1f}%")
 
     wind_strengths.append(wind_strength)
     max_burned_percents.append(total_burned / REPEATS)
-    burn_durations.append(total_duration / REPEATS)
     final_burned_percents.append(total_final_burned / REPEATS)
-    peak_fire_fronts.append(total_peak_front / REPEATS)
 
 print("\nAll simulations finished!\n")
 
 # === Plotting ===
-fig, axs = plt.subplots(2, 2, figsize=(14, 10))
-fig.suptitle("Forest Fire Simulation Metrics vs Wind Strength (Averaged)", fontsize=16)
+sns.set_theme(style="whitegrid")
 
-axs[0, 0].plot(wind_strengths, max_burned_percents, marker="o")
-axs[0, 0].set_title("Max Burned % of Burnable Cells")
-axs[0, 0].set_xlabel("Wind Strength (km/h)")
-axs[0, 0].set_ylabel("Max Burned (%)")
-axs[0, 0].grid()
+fig, axs = plt.subplots(1, 2, figsize=(14, 6))
+fig.suptitle(
+    "Forest Fire Simulation Metrics vs Wind Strength (Averaged)",
+    fontsize=20,
+    fontweight="bold",
+)
 
-axs[0, 1].plot(wind_strengths, burn_durations, marker="o")
-axs[0, 1].set_title("Burn Duration (frames)")
-axs[0, 1].set_xlabel("Wind Strength (km/h)")
-axs[0, 1].set_ylabel("Duration (frames)")
-axs[0, 1].grid()
+# Max Burned %
+axs[0].plot(
+    wind_strengths,
+    max_burned_percents,
+    marker="o",
+    color="firebrick",
+    linewidth=2,
+    markersize=6,
+    label="Max Burned %",
+)
+axs[0].set_title("Max Burned % of Burnable Cells", fontsize=14, fontweight="bold")
+axs[0].set_xlabel("Wind Strength (km/h)", fontsize=12)
+axs[0].set_ylabel("Max Burned (%)", fontsize=12)
+axs[0].legend()
+axs[0].grid(True, linestyle="--", alpha=0.7)
+axs[0].set_ylim(0, 105)
+axs[0].yaxis.set_major_formatter(mtick.PercentFormatter())
 
-axs[1, 0].plot(wind_strengths, final_burned_percents, marker="o")
-axs[1, 0].set_title("Final Burned % of Burnable Cells (at end)")
-axs[1, 0].set_xlabel("Wind Strength (km/h)")
-axs[1, 0].set_ylabel("Final Burned (%)")
-axs[1, 0].grid()
+# Final Burned %
+axs[1].plot(
+    wind_strengths,
+    final_burned_percents,
+    marker="s",
+    color="darkgreen",
+    linewidth=2,
+    markersize=6,
+    label="Final Burned %",
+)
+axs[1].set_title(
+    "Final Burned % of Burnable Cells (at end)", fontsize=14, fontweight="bold"
+)
+axs[1].set_xlabel("Wind Strength (km/h)", fontsize=12)
+axs[1].set_ylabel("Final Burned (%)", fontsize=12)
+axs[1].legend()
+axs[1].grid(True, linestyle="--", alpha=0.7)
+axs[1].set_ylim(0, 105)
+axs[1].yaxis.set_major_formatter(mtick.PercentFormatter())
 
-axs[1, 1].plot(wind_strengths, peak_fire_fronts, marker="o")
-axs[1, 1].set_title("Peak Fire Front (cells)")
-axs[1, 1].set_xlabel("Wind Strength (km/h)")
-axs[1, 1].set_ylabel("Peak Burning (cells)")
-axs[1, 1].grid()
+# Add a general description as figure label
+fig.text(
+    0.5,
+    0.01,
+    (
+        f"Each point is averaged over {REPEATS} simulation runs per wind strength.\n"
+        f"Grid: {GRID_WIDTH}x{GRID_HEIGHT} | "
+        f"Thunder: {THUNDER_PCT}% every {STEPS_BETWEEN_THUNDER} steps | "
+        f"Initial fire % (tree): {FIRE_TREE}, (grass): {FIRE_GRASS} | "
+        f"Wind angle: {WIND_ANGLE}° | "
+        f"Wind strengths: 0–{MAX_WIND_STRENGTH} (step {WIND_STRENGTH_STEP})"
+    ),
+    ha="center",
+    fontsize=12,
+    color="dimgray",
+)
 
-plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+plt.tight_layout(rect=[0, 0.06, 1, 0.95])
 plt.savefig("../res/fire_metrics_vs_wind_strength_averaged.png", dpi=150)
-print("Plot saved to res/fire_metrics_vs_wind_strength_averaged.png")

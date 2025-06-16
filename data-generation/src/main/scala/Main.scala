@@ -7,7 +7,7 @@ import scala.io.Source
 object Main extends App {
   val RUN_FAST = false
 
-  val defaults = List(20, 20, 0, 1, 5, 20, 0, 0, 1)
+  val defaults = List(20, 20, 0, 1, 5, 10, 0, 0, 1)
   val parsedArgs = args.dropWhile(_ == "--").map(_.toIntOption).toList
   val finalArgs =
     (parsedArgs ++ defaults.map(Some(_))).take(9).map(_.getOrElse(0))
