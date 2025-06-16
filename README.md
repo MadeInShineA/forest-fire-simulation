@@ -131,6 +131,22 @@ Run these steps in order for correct data flow:
    ```
 ---
 
+## 📊 Running Data Visualization
+
+To reproduce the wind strength analysis and generate summary plots:
+
+1. **Ensure you have Python 3 and the required libraries installed:**
+  You may wish to use a virtual environment.
+   ```bash
+   cd data-visualization
+   pip install -r requirements.txt
+   ```
+3. ** Run the visualization python file **
+   ```bash
+   python main.py
+   ```
+This will generate the summary plots inside res/fire_metrics_vs_wind_strength_averaged.png 
+
 ## 📄 License
 
 *No license specified. All rights reserved by [MadeInShineA](https://github.com/MadeInShineA).*
