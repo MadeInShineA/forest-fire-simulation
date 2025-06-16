@@ -90,7 +90,9 @@ object Main extends App {
     val doStep = step && !lastStepSeen
 
     val doThunder =
-      stepsBetweenThunder > 0 && (stepNum % stepsBetweenThunder == 0)
+      stepsBetweenThunder > 0 &&
+        (stepNum > 0) &&
+        (stepNum % stepsBetweenThunder == 0)
 
     if (!paused || doStep) {
       val nextGrid =
