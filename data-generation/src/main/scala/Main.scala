@@ -5,13 +5,10 @@ import play.api.libs.json._
 import scala.io.Source
 
 object Main extends App {
-  // If true, runs the simulation at max speed (no sleep); if false, adds delay between steps
   val RUN_FAST = false
 
-  // Default parameters for simulation: width, height, thunder %, thunder freq, burning trees, burning grass, wind enabled, wind angle, wind strength
+  // Default simulation params: width, height, thunder %, thunder freq, burning trees, burning grass, wind enabled, wind angle, wind strength
   val defaults = List(20, 20, 0, 1, 5, 10, 0, 0, 1)
-
-  // Parse arguments, using defaults for any not provided (max 9 expected params)
   val parsedArgs = args.dropWhile(_ == "--").map(_.toIntOption).toList
   val finalArgs =
     (parsedArgs ++ defaults.map(Some(_))).take(9).map(_.getOrElse(0))
@@ -27,14 +24,8 @@ object Main extends App {
     windStrength
   ) = finalArgs
 
-  // ====== RANDOM NUMBER GENERATOR ======
-  // Uncomment the next two lines for deterministic simulation runs
-  // val rngSeed = 42
-  // val rand = new Random(rngSeed)
-
   val rand = new Random()
 
-  /** Writes initial simulation file with metadata and first grid state */
   def writeInitialFiles(grid: Grid): Unit = {
     Using.resource(new PrintWriter("res/simulation_stream.ndjson")) { out =>
       val metadata = Json.obj("width" -> width, "height" -> height)
@@ -43,10 +34,6 @@ object Main extends App {
     }
   }
 
-  /** Loads control state from the control JSON (written by frontend). Returns
-    * (thunder %, stepsBetweenThunder, windAngle, windStrength, windEnabled,
-    * paused, step).
-    */
   def loadControlState(
       defaults: (Int, Int, Int, Int, Boolean)
   ): (Int, Int, Int, Int, Boolean, Boolean, Boolean) = {
@@ -73,35 +60,31 @@ object Main extends App {
     )
   }
 
-  /** Appends a simulation frame (grid) to the NDJSON file */
   def writeFrame(out: FileWriter, grid: Grid): Unit = {
     out.write(Json.stringify(Json.toJson(grid.encodeCells)) + "\n")
     out.flush()
   }
 
-  /** Updates sim_control.json with new values (used to unset "step" after
-    * one-step-advance)
-    */
   def updateControlJson(controlJson: JsObject): Unit = {
     Using.resource(new PrintWriter("res/sim_control.json")) { writer =>
       writer.println(Json.prettyPrint(controlJson))
     }
   }
 
-  /** Main simulation loop: advances the simulation and writes frames.
-    *   - Pauses if the user requests
-    *   - Handles single-step advance ("step") and thunder events
-    */
+  // ---- Main loop with thunder timer logic ----
   def loop(
       grid: Grid,
       out: FileWriter,
       lastStepSeen: Boolean,
       defaultControl: (Int, Int, Int, Int, Boolean),
-      stepNum: Int = 0
+      stepNum: Int = 0,
+      lastThunderSettings: (Int, Int) =
+        (thunderPercentage, stepsBetweenThunder),
+      thunderStepCounter: Int = 0
   ): Unit = {
     val (
       thunderPct,
-      stepsBetweenThunder,
+      stepsBetweenThunderNow,
       windAngle,
       windStrength,
       windEnabled,
@@ -110,10 +93,39 @@ object Main extends App {
     ) = loadControlState(defaultControl)
     val doStep = step && !lastStepSeen
 
+    val thunderParamsChanged =
+      (stepsBetweenThunderNow != lastThunderSettings._2)
+
+    // No thunder on very first step!
+    val isFirstStep = stepNum == 0
+
+    // Scheduled thunder: interval reached
+    val scheduledThunder =
+      stepsBetweenThunderNow > 0 && thunderStepCounter >= stepsBetweenThunderNow
+
+    // If interval changed, compare timer: fire now if timer is already over the new interval
+    val thunderOnIntervalChange =
+      thunderParamsChanged && thunderStepCounter >= stepsBetweenThunderNow && !isFirstStep
+
     val doThunder =
-      stepsBetweenThunder > 0 &&
-        (stepNum > 0) &&
-        (stepNum % stepsBetweenThunder == 0)
+      (!isFirstStep && (scheduledThunder || thunderOnIntervalChange))
+
+    // Update thunder timer: reset if thunder fires, else increment
+    val nextThunderStepCounter =
+      if (doThunder) 0
+      else thunderStepCounter + 1
+
+    // When interval changes, and timer is LESS than new interval, just keep counting up until the new value is reached.
+    val newLastThunderSettings =
+      if (thunderParamsChanged && doThunder)
+        (thunderPct, stepsBetweenThunderNow)
+      else if (thunderParamsChanged)
+        (
+          thunderPct,
+          stepsBetweenThunderNow
+        ) // Even if not firing, keep the updated interval for future comparison
+      else
+        lastThunderSettings
 
     if (!paused || doStep) {
       val nextGrid =
@@ -144,7 +156,9 @@ object Main extends App {
         out,
         step,
         defaultControl,
-        stepNum + 1
+        stepNum + 1,
+        newLastThunderSettings,
+        nextThunderStepCounter
       )
     } else {
       if (!RUN_FAST) Thread.sleep(20)
@@ -153,22 +167,19 @@ object Main extends App {
         out,
         lastStepSeen,
         defaultControl,
-        stepNum
+        stepNum,
+        lastThunderSettings,
+        thunderStepCounter
       )
     }
   }
 
-  // ─────────────────── Entrypoint ─────────────────── //
-
-  // Generate the initial simulation grid
+  // ---- Entrypoint ----
   val initialGrid =
     Grid(width, height, rand).igniteRandomFires(fireTree, fireGrass)
-
-  // Write the first frame and metadata to file
   writeInitialFiles(initialGrid)
 
   if (!RUN_FAST) Thread.sleep(100)
-  // Open the NDJSON file for appending and run the main simulation loop
   Using.resource(new FileWriter("res/simulation_stream.ndjson", true)) { out =>
     loop(
       initialGrid,
@@ -179,8 +190,11 @@ object Main extends App {
         stepsBetweenThunder,
         windAngle,
         windStrength,
-        windEnabled == 1 // expects Boolean
-      )
+        windEnabled == 1
+      ),
+      0,
+      (thunderPercentage, stepsBetweenThunder),
+      0
     )
   }
 }
