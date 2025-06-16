@@ -79,14 +79,20 @@ struct Simulation {
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum SimAssetType {
     GrowingTree1,
+    BurningGrowingTree1,
     GrowingTree2,
+    BurningGrowingTree2_1,
+    BurningGrowingTree2_2,
     Tree,
+    BurningTree1,
+    BurningTree2,
+    BurningTree3,
     BurnedTree,
-    // BurningTree,
     Grass,
+    BurningGrass,
     BurnedGrass,
-    // Ash,
     Water,
+    Thunder,
     // ...add others as needed
 }
 
@@ -94,15 +100,22 @@ impl SimAssetType {
     pub fn asset_path(&self) -> &'static str {
         match self {
             SimAssetType::GrowingTree1 => "growing-tree1.glb#Scene0",
+            SimAssetType::BurningGrowingTree1 => "burning-growing-tree1.glb#Scene0",
             SimAssetType::GrowingTree2 => "growing-tree2.glb#Scene0",
+            SimAssetType::BurningGrowingTree2_1 => "burning-growing-tree2-1.glb#Scene0",
+            SimAssetType::BurningGrowingTree2_2 => "burning-growing-tree2-2.glb#Scene0",
             SimAssetType::Tree => "tree.glb#Scene0",
+            SimAssetType::BurningTree1 => "burning-tree1.glb#Scene0",
+            SimAssetType::BurningTree2 => "burning-tree2.glb#Scene0",
+            SimAssetType::BurningTree3 => "burning-tree3.glb#Scene0",
+
             SimAssetType::BurnedTree => "burned-tree.glb#Scene0",
 
-            //SimAssetType::BurningTree => "assets/burning_tree.glb#Scene0",
             SimAssetType::Grass => "grass.glb#Scene0",
+            SimAssetType::BurningGrass => "burning-grass.glb#Scene0",
             SimAssetType::BurnedGrass => "burned-grass.glb#Scene0",
-            // SimAssetType::Ash => "assets/ash.glb#Scene0",
             SimAssetType::Water => "water.glb#Scene0",
+            SimAssetType::Thunder => "thunder.glb#Scene0",
         }
     }
 }
@@ -358,15 +371,22 @@ fn setup_sim_assets(mut commands: Commands, asset_server: Res<AssetServer>) {
     let mut scenes = HashMap::new();
     for asset_type in [
         SimAssetType::GrowingTree1,
+        SimAssetType::BurningGrowingTree1,
         SimAssetType::GrowingTree2,
+        SimAssetType::BurningGrowingTree2_1,
+        SimAssetType::BurningGrowingTree2_1,
         SimAssetType::Tree,
+        SimAssetType::BurningTree1,
+        SimAssetType::BurningTree2,
+        SimAssetType::BurningTree3,
         SimAssetType::BurnedTree,
         // SimAssetType::BurningTree,
         SimAssetType::Grass,
+        SimAssetType::BurningGrass,
         SimAssetType::BurnedGrass,
         // SimAssetType::Ash,
         SimAssetType::Water,
-        // add more if needed
+        SimAssetType::Thunder, // add more if needed
     ] {
         let handle = asset_server.load(asset_type.asset_path());
         scenes.insert(asset_type, handle);
@@ -700,9 +720,9 @@ fn start_simulation_button_system(
     let cmdline = vec![
         params.width.to_string(),
         params.height.to_string(),
+        params.thunder_percentage.to_string(),
         params.burning_trees.to_string(),
         params.burning_grasses.to_string(),
-        params.thunder_percentage.to_string(),
         (params.is_wind_toggled as i32).to_string(),
         params.wind_angle.to_string(),
         params.wind_strength.to_string(),
@@ -972,28 +992,25 @@ fn advance_frame_system(
                 "G" => {
                     spawn_sim_asset(&mut commands, &scenes, SimAssetType::Grass, pos);
                 }
+                "+" => {
+                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurningGrass, pos);
+                }
                 "-" => {
                     spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurnedGrass, pos);
                 }
                 "W" => {
                     spawn_sim_asset(&mut commands, &scenes, SimAssetType::Water, pos);
                 }
-
-                // All your original cell handling code, unchanged:
-                "*" | "**" | "***" => {
-                    spawn_cell(&mut commands, &cache, "trunk", pos + Vec3::Y * 2.0);
-                    spawn_cell(
-                        &mut commands,
-                        &cache,
-                        match cell.as_str() {
-                            "*" => "burning_leaves1",
-                            "**" => "burning_leaves2",
-                            "***" => "burning_leaves3",
-                            _ => "leaves",
-                        },
-                        pos + Vec3::Y * 7.0,
-                    );
+                "*" => {
+                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurningTree1, pos);
                 }
+                "**" => {
+                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurningTree2, pos);
+                }
+                "***" => {
+                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::BurningTree3, pos);
+                }
+
                 "s" => {
                     spawn_sim_asset(&mut commands, &scenes, SimAssetType::GrowingTree1, pos);
                 }
@@ -1055,98 +1072,8 @@ fn advance_frame_system(
                     );
                 }
                 "TH" => {
-                    // All your thunder logic as before
-                    let thunder_parent = commands
-                        .spawn((
-                            SpatialBundle {
-                                transform: Transform::from_translation(pos),
-                                ..default()
-                            },
-                            CellEntity,
-                            SimulationEntity,
-                        ))
-                        .id();
-
-                    commands.entity(thunder_parent).with_children(|parent| {
-                        // Tree
-                        parent.spawn((PbrBundle {
-                            mesh: cache.meshes["trunk"].clone(),
-                            material: cache.materials["trunk"].clone(),
-                            transform: Transform::from_translation(Vec3::Y * 2.0),
-                            ..default()
-                        },));
-                        parent.spawn((PbrBundle {
-                            mesh: cache.meshes["leaves"].clone(),
-                            material: cache.materials["leaves"].clone(),
-                            transform: Transform::from_translation(Vec3::Y * 7.0),
-                            ..default()
-                        },));
-
-                        // Cloud puffs
-                        let cloud_center = Vec3::Y * (7.0 + 60.0);
-                        let puff_offsets = [
-                            Vec3::ZERO,
-                            Vec3::new(2.0, 0.5, 0.0),
-                            Vec3::new(-2.0, 0.5, 0.0),
-                            Vec3::new(0.0, 0.5, 2.0),
-                            Vec3::new(0.0, 0.5, -2.0),
-                            Vec3::new(1.2, 1.0, 1.2),
-                            Vec3::new(-1.2, 1.0, -1.2),
-                        ];
-                        for offset in puff_offsets {
-                            parent.spawn((PbrBundle {
-                                mesh: cache.meshes["cloud_puff"].clone(),
-                                material: cache.materials["cloud"].clone(),
-                                transform: Transform::from_translation(cloud_center + offset)
-                                    .with_scale(Vec3::splat(2.2)),
-                                ..default()
-                            },));
-                        }
-
-                        // Lightning bolt segments
-                        let tree_top = 7.0;
-                        let bolt_top = tree_top + 60.0;
-                        let segments = 20;
-                        let amplitude = 2.5;
-                        let radius = 1.2;
-
-                        let mut points = Vec::new();
-                        for i in 0..=segments {
-                            let t = i as f32 / segments as f32;
-                            let y = bolt_top - (bolt_top - tree_top) * t;
-                            let x_offset = if i % 2 == 0 { amplitude } else { -amplitude };
-                            let z_offset = if i % 4 < 2 { amplitude } else { -amplitude };
-                            points.push(Vec3::new(x_offset * (1.0 - t), y, z_offset * (1.0 - t)));
-                        }
-                        for pair in points.windows(2) {
-                            let from = pair[0];
-                            let to = pair[1];
-                            let dir = to - from;
-                            let length = dir.length();
-                            let rotation = Quat::from_rotation_arc(Vec3::Y, dir.normalize());
-                            let center = from + dir * 0.5;
-                            parent.spawn((PbrBundle {
-                                mesh: cache.meshes["lightning_segment"].clone(),
-                                material: cache.materials["thunder"].clone(),
-                                transform: Transform::from_translation(center)
-                                    .with_rotation(rotation)
-                                    .with_scale(Vec3::new(radius, length / 2.0, radius)),
-                                ..default()
-                            },));
-                        }
-
-                        // Point light for flash
-                        parent.spawn((PointLightBundle {
-                            transform: Transform::from_translation(cloud_center - Vec3::Y * 1.5),
-                            point_light: PointLight {
-                                intensity: 18000.0,
-                                range: 100.0,
-                                shadows_enabled: false,
-                                ..default()
-                            },
-                            ..default()
-                        },));
-                    });
+                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::Thunder, pos);
+                    spawn_sim_asset(&mut commands, &scenes, SimAssetType::Tree, pos);
                 }
 
                 // All other types use the kind_from_str mapping
