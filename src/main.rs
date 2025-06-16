@@ -1137,7 +1137,7 @@ fn ui_system(
                                 total_trees_over_time
                             ));
                             plot_ui.line(plot_percent!(
-                                "Ashes %",
+                                "Burned Tree %",
                                 stats.tree_ashes_over_time,
                                 total_trees_over_time
                             ));
@@ -1190,7 +1190,7 @@ fn ui_system(
                                 total_grass_over_time
                             ));
                             plot_ui.line(plot_percent!(
-                                "Ashes %",
+                                "Burned Grass %",
                                 stats.grass_ashes_over_time,
                                 total_grass_over_time
                             ));
