@@ -17,7 +17,7 @@ The model landscape is discretized into cells, each of which may be in one of se
 | s           | Sapling              | Young tree, transitional state                   |
 | y           | YoungTree            | Older than sapling, not mature                   |
 | T           | Tree                 | Mature, primary fuel for crown fire              |
-| *,**,***    | BurningTree (1/2/3)  | Stages of burning for Tree                       |
+| \*,\*\*,\*\*\*    | BurningTree (1/2/3)  | Stages of burning for Tree                       |
 | !           | BurningSapling       | Sapling on fire                                  |
 | &,@         | BurningYoungTree     | Young tree on fire (two stages)                  |
 | +           | BurningGrass         | Grass on fire                                    |
