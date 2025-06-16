@@ -142,13 +142,15 @@ Run these steps in order for correct data flow:
 
 To reproduce the wind strength analysis and generate summary plots:
 
-1. **Ensure you have Python 3 and the required libraries installed:**
+ 1. **Ensure you have Python 3 and the required libraries installed:**   
   You may wish to use a virtual environment.
-   ```bash
-   cd data-visualization
-   pip install -r requirements.txt
-   ```
-3. ** Run the visualization python file **
+  ```bash
+     cd data-visualization
+     pip install -r requirements.txt
+  ```
+   
+  
+ 3. **Run the visualization python file**
    ```bash
    python main.py
    ```
