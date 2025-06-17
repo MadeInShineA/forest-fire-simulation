@@ -74,7 +74,7 @@ case class Grid(
     rand: Random,
 
     // --- Regrowth timing (in steps = days) ---
-    ashRegrowSteps: Int = 300, // Days before regrowth can start on ash
+    burnedTreeRegrowSteps: Int = 300, // Days before regrowth can start on ash
     burnedGrassRegrowSteps: Int = 15, // Days before burned grass can recover
     saplingGrowSteps: Int = 60, // Days for sapling → young tree
     youngTreeGrowSteps: Int = 180, // Days for young tree → mature tree
@@ -366,7 +366,9 @@ case class Grid(
 
         // Burned tree: count days, regrow as sapling or grass after enough time
         case BurnedTree =>
-          if (grow >= ashRegrowSteps - 1 && hasLivingOrWaterNeighbor(x, y)) {
+          if (
+            grow >= burnedTreeRegrowSteps - 1 && hasLivingOrWaterNeighbor(x, y)
+          ) {
             if (rand.nextDouble() < ashToTreeProb) Cell(GrowingTree1)
             else Cell(Grass)
           } else Cell(BurnedTree, grow + 1)
