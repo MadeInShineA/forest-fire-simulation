@@ -128,7 +128,7 @@ The landscape is modeled as a grid of cells, each of which may be:
 * **Water:** Unburnable, no regrowth.
 * **Grass:** Burns rapidly, recovers quickly.
 * **Tree → Sapling → Young Tree:** Trees progress through growth stages, burn in several steps, and regrow after fire as saplings or grass.
-* **Ash, Burned Grass:** Track post-fire recovery for trees and grass.
+* **Burned Tree, Burned Grass:** Track post-fire recovery for trees and grass.
 * **Burning States:** Different burning states capture the stages and animation of combustion for trees, saplings, young trees, and grass.
 * **Thunder:** Represents ignition points caused by thunder strikes.
 
