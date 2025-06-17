@@ -35,7 +35,7 @@ All timing parameters are expressed in days (model steps).
 
 | Parameter                | Value | Justification & Source                                                        |
 | ------------------------ | ----- | ----------------------------------------------------------------------------- |
-| `ashRegrowSteps`         | 300   | ~10 months; matches time for soil & seeds to recover after severe burn [1,2]  |
+| `burnedTreeRegrowSteps`         | 300   | ~10 months; matches time for soil & seeds to recover after severe burn [1,2]  |
 | `burnedGrassRegrowSteps` | 15    | ~2 weeks; grass quickly recolonizes post-burn [1]                             |
 | `saplingGrowSteps`       | 60    | ~2 months; rapid establishment phase (see [1], Table 6.1)                     |
 | `youngTreeGrowSteps`     | 180   | ~6 months; trees reach maturity after establishment [2]                       |
