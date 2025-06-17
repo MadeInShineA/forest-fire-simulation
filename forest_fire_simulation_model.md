@@ -109,14 +109,32 @@ Cells directly downwind ($\text{alignment} = 1$) receive up to double the base p
 
 ### C. Fire Jumping (Spotting)
 
-Rare, wind-driven "spotting" events let fire jump over cells:
+Rare, wind-driven "spotting" events allow fire to jump over one or more cells, simulating embers igniting fuels ahead of the main fire front ([5,6]). Spotting is attempted only when wind is enabled, and the cell did not ignite via adjacent burning neighbors.
 
-- $\text{fireJumpBaseChance} = 0.002$ (0.2% base chance per day, distance-limited) [6]
-- $\text{fireJumpMaxMult} = 5.0$ (max wind multiplier, matches spread amplification) [5]
+For each unburned, flammable cell, fire jumping is checked at discrete distances $d \in \{2, 3, 4\}$ along the wind direction. If any cell at those distances in the wind’s path is burning, the chance of ignition by spotting is:
 
-**Sources for this section:**
-- [5] Albini, F.A. (1976). "Estimating Wildfire Behavior and Effects." USDA Forest Service. ([Link](https://www.fs.usda.gov/treesearch/pubs/32533))
-- [6] Cheney, N.P., Gould, J.S., & Catchpole, W.R. (1998). "Prediction of fire spread in grasslands." Int. J. Wildland Fire, 8(1):4–13. ([Link](https://www.publish.csiro.au/wf/WF9980004))
+$P_\text{jump}(d, w) = \text{fireJumpBaseChance} \times \text{fireJumpWindMult}(w) \div (d \times \text{fireJumpDistFactor})$
+
+Where:
+
+- $\text{fireJumpBaseChance} = 0.002$ (base daily probability of spotting)
+- $d$ = jump distance (in cells, e.g., 2, 3, 4)
+- $\text{fireJumpDistFactor} = 3.0$ (scaling: longer jumps are less probable)
+- $\text{fireJumpWindMult}(w)$ is a wind-driven amplification factor:
+
+
+$\text{fireJumpWindMult}(w) = 1 + (\text{fireJumpMaxMult} - 1) \cdot \text{sigmoid}(s \cdot (w - (m + 2)))$
+
+- $w$ = wind strength (km/h)
+- $s = 0.4$ (wind steepness)
+- $m = 20.0$ (wind midpoint, shifted +2 for jumping threshold)
+- $\text{fireJumpMaxMult} = 5.0$ (max wind-driven jump multiplier)
+
+A fire jump occurs if a burning cell exists at distance $d$ in the wind direction and a random draw is less than $P_\text{jump}(d, w)$. This mechanism lets high wind conditions trigger rapid, discontinuous fire advance, bypassing typical firebreaks.
+
+**Sources for this section:**  
+- [5] Albini, F.A. (1976). "Estimating Wildfire Behavior and Effects."  
+- [6] Cheney, N.P., Gould, J.S., & Catchpole, W.R. (1998). "Prediction of fire spread in grasslands."
 
 ---
 

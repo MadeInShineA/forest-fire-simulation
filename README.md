@@ -168,7 +168,9 @@ For a comprehensive explanation of the simulation’s scientific foundations inc
 
 ## 🔥 Model Wind Strength Analysis
 
-![image](https://github.com/user-attachments/assets/8619df19-2714-44e5-bbb8-57eecd2558db)
+![fire_metrics_vs_wind_strength_averaged](https://github.com/user-attachments/assets/86a739e2-c960-4aa9-84cf-4a6f4fb8519a)
+
+
 
 ### Wind Strength and Burn Severity
 
