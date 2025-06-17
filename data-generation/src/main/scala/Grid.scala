@@ -74,7 +74,8 @@ case class Grid(
     rand: Random,
 
     // --- Regrowth timing (in steps = days) ---
-    burnedTreeRegrowSteps: Int = 300, // Days before regrowth can start on ash
+    burnedTreeRegrowSteps: Int =
+      300, // Days before regrowth can start on burned tree
     burnedGrassRegrowSteps: Int = 15, // Days before burned grass can recover
     saplingGrowSteps: Int = 60, // Days for sapling → young tree
     youngTreeGrowSteps: Int = 180, // Days for young tree → mature tree
@@ -96,7 +97,7 @@ case class Grid(
     fireJumpMaxMult: Double = 5.0,
 
     // --- Post-fire regeneration probabilities (per day, after regrow delay) ---
-    ashToTreeProb: Double = 0.03,
+    burnedTreeToTreeProb: Double = 0.03,
     burnedGrassToGrassProb: Double = 0.4
 ) {
   private val neighborDirs = List(
@@ -369,7 +370,7 @@ case class Grid(
           if (
             grow >= burnedTreeRegrowSteps - 1 && hasLivingOrWaterNeighbor(x, y)
           ) {
-            if (rand.nextDouble() < ashToTreeProb) Cell(GrowingTree1)
+            if (rand.nextDouble() < burnedTreeToTreeProb) Cell(GrowingTree1)
             else Cell(Grass)
           } else Cell(BurnedTree, grow + 1)
 
