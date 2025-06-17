@@ -41,8 +41,8 @@ All timing parameters are expressed in days (model steps).
 | `youngTreeGrowSteps`     | 180   | ~6 months; trees reach maturity after establishment [2]                       |
 
 **Sources for this section:**
-- [1] Bond, W.J., & van Wilgen, B.W. (1996). *Fire and Plants*. Cambridge University Press. ([Link](https://books.google.com/books/about/Fire_and_Plants.html?id=J5pNZo9N7KkC))
-- [2] Johnstone, J.F. et al. (2016). "Changing disturbance regimes, ecological memory, and forest resilience." Front. Ecol. Environ., 14(7):369-378. ([Link](https://esajournals.onlinelibrary.wiley.com/doi/full/10.1002/fee.1311))
+- [1] Bond, W.J., & van Wilgen, B.W. (1996). *Fire and Plants*. Cambridge University Press.
+- [2] Johnstone, J.F. et al. (2016). "Changing disturbance regimes, ecological memory, and forest resilience." Front. Ecol. Environ., 14(7):369-378.
 
 ---
 
@@ -58,8 +58,8 @@ Each day, a living cell may ignite from a burning neighbor, with probability **p
 Probabilities increase for young vegetation (see model code). These values are inspired by statistical rates from the Rothermel model and wildfire simulation systems.
 
 **Sources for this section:**
-- [3] Andrews, P.L. (2018). "The Rothermel surface fire spread model and associated developments: A comprehensive explanation." RMRS-GTR-371. ([Link](https://www.fs.usda.gov/treesearch/pubs/56042))
-- [4] Finney, M.A. (1998). "FARSITE: Fire Area Simulator—model development and evaluation." USDA Forest Service. ([Link](https://www.fs.usda.gov/treesearch/pubs/21173))
+- [3] Andrews, P.L. (2018). "The Rothermel surface fire spread model and associated developments: A comprehensive explanation." RMRS-GTR-371.
+- [4] Finney, M.A. (1998). "FARSITE: Fire Area Simulator—model development and evaluation." USDA Forest Service.
 
 ---
 
@@ -149,10 +149,10 @@ These values ensure fast recolonization for grass and slower, probabilistic retu
 
 ## 6. References
 
-1. Bond, W.J., & van Wilgen, B.W. (1996). *Fire and Plants*. Cambridge University Press. [Link](https://books.google.com/books/about/Fire_and_Plants.html?id=J5pNZo9N7KkC)
-2. Johnstone, J.F. et al. (2016). "Changing disturbance regimes, ecological memory, and forest resilience." Front. Ecol. Environ., 14(7):369–378. [Link](https://esajournals.onlinelibrary.wiley.com/doi/full/10.1002/fee.1311)
-3. Andrews, P.L. (2018). "The Rothermel surface fire spread model and associated developments: A comprehensive explanation." RMRS-GTR-371. [Link](https://www.fs.usda.gov/treesearch/pubs/56042)
-4. Finney, M.A. (1998). "FARSITE: Fire Area Simulator—model development and evaluation." USDA Forest Service. [Link](https://www.fs.usda.gov/treesearch/pubs/21173)
-5. Albini, F.A. (1976). "Estimating Wildfire Behavior and Effects." USDA Forest Service. [Link](https://www.fs.usda.gov/treesearch/pubs/32533)
-6. Cheney, N.P., Gould, J.S., & Catchpole, W.R. (1998). "Prediction of fire spread in grasslands." Int. J. Wildland Fire, 8(1):4–13. [Link](https://www.publish.csiro.au/wf/WF9980004)
+1. Bond, W.J., & van Wilgen, B.W. (1996). *Fire and Plants*. Cambridge University Press.
+2. Johnstone, J.F. et al. (2016). "Changing disturbance regimes, ecological memory, and forest resilience." Front. Ecol. Environ., 14(7):369–378.
+3. Andrews, P.L. (2018). "The Rothermel surface fire spread model and associated developments: A comprehensive explanation." RMRS-GTR-371.
+4. Finney, M.A. (1998). "FARSITE: Fire Area Simulator—model development and evaluation." USDA Forest Service.
+5. Albini, F.A. (1976). "Estimating Wildfire Behavior and Effects." USDA Forest Service.
+6. Cheney, N.P., Gould, J.S., & Catchpole, W.R. (1998). "Prediction of fire spread in grasslands." Int. J. Wildland Fire, 8(1):4–13.
 
