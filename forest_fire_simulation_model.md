@@ -35,7 +35,7 @@ All timing parameters are expressed in days (model steps).
 
 | Parameter                | Value | Justification & Source                                                        |
 | ------------------------ | ----- | ----------------------------------------------------------------------------- |
-| `ashRegrowSteps`         | 300   | ~10 months; matches time for soil & seeds to recover after severe burn [1,2]  |
+| `burnedTreeRegrowSteps`         | 300   | ~10 months; matches time for soil & seeds to recover after severe burn [1,2]  |
 | `burnedGrassRegrowSteps` | 15    | ~2 weeks; grass quickly recolonizes post-burn [1]                             |
 | `saplingGrowSteps`       | 60    | ~2 months; rapid establishment phase (see [1], Table 6.1)                     |
 | `youngTreeGrowSteps`     | 180   | ~6 months; trees reach maturity after establishment [2]                       |
@@ -53,7 +53,7 @@ Each day, a living cell may ignite from a burning neighbor, with probability **p
 | Parameter         | Value | Justification & Source                                             |
 | ----------------- | ----- | ------------------------------------------------------------------ |
 | `treeIgniteProb`  | 0.02  | 2% daily chance per burning neighbor, moderate fuel moisture [3,4] |
-| `grassIgniteProb` | 0.08  | 8% for grass, reflecting higher flammability and spread [3]        |
+| `grassIgniteProb` | 0.08  | 8% daily chance per burning neighbor, reflecting higher flammability and spread [3]        |
 
 Probabilities increase for young vegetation (see model code). These values are inspired by statistical rates from the Rothermel model and wildfire simulation systems.
 
