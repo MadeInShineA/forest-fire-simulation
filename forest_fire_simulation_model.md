@@ -22,10 +22,10 @@ The model landscape is discretized into cells, each of which may be in one of se
 | &,@         | BurningYoungTree     | Young tree on fire (two stages)                  |
 | +           | BurningGrass         | Grass on fire                                    |
 | TH          | Thunder              | Lightning strike (causes instant ignition)       |
-| A           | Ash                  | Post-fire residue from trees                     |
+| A           | BurnedTree                  | Post-fire residue from trees                     |
 | -           | BurnedGrass          | Post-fire residue from grass                     |
 
-Cell states were designed for simulation expressivity rather than direct empirical mapping, but post-fire stages (Ash, BurnedGrass) and developmental stages (Sapling, YoungTree) reflect ecological succession concepts. See [Bond & van Wilgen 1996, 1], [Johnstone et al. 2016, 2].
+Cell states were designed for simulation expressivity rather than direct empirical mapping, but post-fire stages (BurnedTree, BurnedGrass) and developmental stages (Sapling, YoungTree) reflect ecological succession concepts. See [Bond & van Wilgen 1996, 1], [Johnstone et al. 2016, 2].
 
 ---
 
@@ -122,7 +122,7 @@ Rare, wind-driven "spotting" events let fire jump over cells:
 
 ## 5. Regeneration and Succession Probabilities
 
-- $\text{ashToTreeProb} = 0.03$ (3% chance per day for ash to regrow as a sapling, post-delay) [1]
+- $\textBurnedTreeToTreeProb} = 0.03$ (3% chance per day for burned tree to regrow as a sapling, post-delay) [1]
 - $\text{burnedGrassToGrassProb} = 0.4$ (40% chance per day for burned grass to regrow, post-delay) [1]
 
 These values ensure fast recolonization for grass and slower, probabilistic return of trees, consistent with successional dynamics (see [1], chapters 5–6).
