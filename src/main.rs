@@ -1097,7 +1097,7 @@ fn ui_system(
                     let screen_height = ctx.screen_rect().height();
                     let available_height = screen_height - 100.0;
 
-                    let num_plots = 6;
+                    let num_plots = 8;
                     let label_height = 22.0;
                     let spacing = 8.0;
                     let total_reserved = (label_height + spacing) * num_plots as f32;
@@ -1197,6 +1197,90 @@ fn ui_system(
                         });
                     handle_plot_click(&grass_plot, &mut *playback, sim.frames.len());
 
+                    ui.separator();
+                    ui.label("Alive Trees vs Alive Grass (%)");
+
+                    // Calculate alive trees as mature + sapling + young
+                    let alive_tree_grass_plot = Plot::new("AliveTreeGrass")
+                        .legend(Legend::default())
+                        .height(plot_height)
+                        .show(ui, |plot_ui| {
+                            let tree_points: PlotPoints = (0..=last_index)
+                                .map(|i| {
+                                    let alive_trees = stats.trees_over_time[i] as f64
+                                        + stats.saplings_over_time[i] as f64
+                                        + stats.young_trees_over_time[i] as f64;
+                                    let alive_grass = stats.grasses_over_time[i] as f64;
+                                    let total_alive = alive_trees + alive_grass;
+                                    let tree_pct = if total_alive > 0.0 {
+                                        (alive_trees / total_alive) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    [i as f64, tree_pct]
+                                })
+                                .collect();
+
+                            let grass_points: PlotPoints = (0..=last_index)
+                                .map(|i| {
+                                    let alive_trees = stats.trees_over_time[i] as f64
+                                        + stats.saplings_over_time[i] as f64
+                                        + stats.young_trees_over_time[i] as f64;
+                                    let alive_grass = stats.grasses_over_time[i] as f64;
+                                    let total_alive = alive_trees + alive_grass;
+                                    let grass_pct = if total_alive > 0.0 {
+                                        (alive_grass / total_alive) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    [i as f64, grass_pct]
+                                })
+                                .collect();
+
+                            plot_ui.line(Line::new(tree_points).name("Alive Trees %"));
+                            plot_ui.line(Line::new(grass_points).name("Alive Grass %"));
+                        });
+                    handle_plot_click(&alive_tree_grass_plot, &mut *playback, sim.frames.len());
+
+                    ui.separator();
+                    ui.label("Dead Trees vs Dead Grass (%)");
+
+                    let dead_tree_grass_plot = Plot::new("DeadTreeGrass")
+                        .legend(Legend::default())
+                        .height(plot_height)
+                        .show(ui, |plot_ui| {
+                            let tree_ash_points: PlotPoints = (0..=last_index)
+                                .map(|i| {
+                                    let dead_trees = stats.tree_ashes_over_time[i] as f64;
+                                    let dead_grass = stats.grass_ashes_over_time[i] as f64;
+                                    let total_dead = dead_trees + dead_grass;
+                                    let tree_ash_pct = if total_dead > 0.0 {
+                                        (dead_trees / total_dead) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    [i as f64, tree_ash_pct]
+                                })
+                                .collect();
+
+                            let grass_ash_points: PlotPoints = (0..=last_index)
+                                .map(|i| {
+                                    let dead_trees = stats.tree_ashes_over_time[i] as f64;
+                                    let dead_grass = stats.grass_ashes_over_time[i] as f64;
+                                    let total_dead = dead_trees + dead_grass;
+                                    let grass_ash_pct = if total_dead > 0.0 {
+                                        (dead_grass / total_dead) * 100.0
+                                    } else {
+                                        0.0
+                                    };
+                                    [i as f64, grass_ash_pct]
+                                })
+                                .collect();
+
+                            plot_ui.line(Line::new(tree_ash_points).name("Dead Trees %"));
+                            plot_ui.line(Line::new(grass_ash_points).name("Dead Grass %"));
+                        });
+                    handle_plot_click(&dead_tree_grass_plot, &mut *playback, sim.frames.len());
                     ui.separator();
                     ui.label("Burning Cells (%)");
                     let burning_plot = Plot::new("Burning")
