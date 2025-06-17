@@ -98,7 +98,7 @@ case class Grid(
 
     // --- Post-fire regeneration probabilities (per day, after regrow delay) ---
     burnedTreeToTreeProb: Double = 0.03,
-    burnedGrassToGrassProb: Double = 0.4
+    burnedGrassToGrassProb: Double = 0.95
 ) {
   private val neighborDirs = List(
     (-1, -1),
