@@ -1,4 +1,4 @@
-# Forest Fire Simulation
+![fire_metrics_vs_wind_strength_averaged](https://github.com/user-attachments/assets/107bac83-e4e2-4c71-8252-35567d8bafe9)# Forest Fire Simulation
 
 A scalable, cross-language, probabilistic wildfire simulation engine for research, visualization, and experimentation.
 
@@ -168,7 +168,8 @@ For a comprehensive explanation of the simulation’s scientific foundations inc
 
 ## 🔥 Model Wind Strength Analysis
 
-![image](https://github.com/user-attachments/assets/8619df19-2714-44e5-bbb8-57eecd2558db)
+![fire_metrics_vs_wind_strength_averaged](https://github.com/user-attachments/assets/9a439a64-3f2b-4b0a-ba01-e4a8fbf692b3)
+
 
 ### Wind Strength and Burn Severity
 
