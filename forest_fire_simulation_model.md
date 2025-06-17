@@ -122,8 +122,8 @@ Rare, wind-driven "spotting" events let fire jump over cells:
 
 ## 5. Regeneration and Succession Probabilities
 
-- $\textBurnedTreeToTreeProb} = 0.03$ (3% chance per day for burned tree to regrow as a sapling, post-delay) [1]
-- $\text{burnedGrassToGrassProb} = 0.4$ (40% chance per day for burned grass to regrow, post-delay) [1]
+- $\text{BurnedTreeToTreeProb} = 0.03$ (3% chance per day for burned tree to regrow as a sapling, post-delay) [1]
+- $\text{burnedGrassToGrassProb} = 0.95$ (95% chance per day for burned grass to regrow, post-delay) [1]
 
 These values ensure fast recolonization for grass and slower, probabilistic return of trees, consistent with successional dynamics (see [1], chapters 5–6).
 
