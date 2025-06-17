@@ -53,7 +53,7 @@ Each day, a living cell may ignite from a burning neighbor, with probability **p
 | Parameter         | Value | Justification & Source                                             |
 | ----------------- | ----- | ------------------------------------------------------------------ |
 | `treeIgniteProb`  | 0.02  | 2% daily chance per burning neighbor, moderate fuel moisture [3,4] |
-| `grassIgniteProb` | 0.08  | 8% for grass, reflecting higher flammability and spread [3]        |
+| `grassIgniteProb` | 0.08  | 8% daily chance per burning neighbor, reflecting higher flammability and spread [3]        |
 
 Probabilities increase for young vegetation (see model code). These values are inspired by statistical rates from the Rothermel model and wildfire simulation systems.
 
