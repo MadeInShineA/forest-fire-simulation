@@ -88,6 +88,45 @@ To reproduce the wind strength analysis and generate summary plots:
 
 ---
 
+## 🔗 Frontend–Backend Communication
+
+The forest fire simulation architecture cleanly separates the **frontend** (3D visualization, UI, playback controls) from the **backend** (Scala simulation engine) for reliability and flexibility.
+
+### Communication Flow
+
+1. **Simulation Control & Parameters**
+   - The Rust frontend (Bevy + egui UI) lets users set simulation parameters (size, thunder, wind, etc.) via sliders, checkboxes, and playback controls.
+   - When the simulation is started or updated, the frontend writes these parameters to `res/sim_control.json`.
+
+2. **Simulation Launch**
+   - The frontend launches the Scala simulation engine in a subprocess via a shell script, passing the parameters as CLI args.
+   - The Scala backend reads its initial conditions and continuously watches `res/sim_control.json` for live updates (such as pause, wind, or thunder adjustments).
+
+3. **Streaming Simulation Data**
+   - As the Scala engine runs, it writes each simulation step as a line of NDJSON (newline-delimited JSON) to `res/simulation_stream.ndjson`. The first line contains metadata (dimensions).
+   - The Rust frontend tails this NDJSON file in real time, decoding each frame as soon as it appears, and immediately updates the 3D world and playback graphs.
+
+4. **Playback, Pause, and Live Control**
+   - Playback controls in the UI (pause, step, resume, speed, jump-to-frame, etc.) update the control JSON. The backend’s main simulation loop re-reads this control state frequently to respect pause or step requests and parameter tweaks without restarting the simulation.
+   - **Frame “stepping”** is supported: if the user clicks “step”, the frontend sets a flag in `sim_control.json`; the backend processes one frame, then resets the flag.
+
+5. **Process Management**
+   - If the frontend is closed or panics, all simulation subprocesses are cleanly killed to avoid orphaned Scala processes.
+
+### Communication Files
+
+- **`res/sim_control.json`**: _Frontend → Backend_  
+  Stores all live simulation parameters and playback controls (paused, wind, thunder, step).
+- **`res/simulation_stream.ndjson`**: _Backend → Frontend_  
+  Streaming output of every simulation step, in compact JSON format for real-time rendering and analysis.
+
+---
+
+**Why this approach?**
+- Decouples simulation speed and UI responsiveness (frontend can pause, rewind, or graph data instantly without slowing the simulation).
+- Allows for robust recovery and headless mode (the backend and data can be used with other frontends or for batch research).
+
+
 ## 🎥 Camera Controls
 
 The 3D visualization features a **first-person "fly camera"** system, giving you full control to explore the simulation from any angle or altitude.
