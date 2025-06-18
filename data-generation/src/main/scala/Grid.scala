@@ -141,7 +141,7 @@ case class Grid(
         windMidpoint,
         windMaxMult
       )
-      baseProb * (1.0 + alignment) * mult
+      (baseProb * (1.0 + alignment) * mult).min(1.0).max(0.0)
     }
   }
 
