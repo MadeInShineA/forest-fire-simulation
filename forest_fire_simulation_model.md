@@ -102,7 +102,7 @@ $
 
 Where:
 - $P_\text{base}$ = base ignition probability
-- $\text{alignment} = \cos(\theta)$ = cosine between wind vector and neighbor direction (from $-1$ upwind to $+1$ downwind)
+- $\text{alignment} = \cos(\theta) =$ Cosine of the angle between wind and neighbor direction; ranges from $-1$ (opposite), $0$ (perpendicular), to $+1$ (same direction).
 - $\text{windAmplifier}$ as above
 
 Cells directly downwind ($\text{alignment} = 1$) receive up to double the base probability before wind amplification [5,6].
