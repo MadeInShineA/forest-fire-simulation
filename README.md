@@ -1,5 +1,10 @@
 # Forest Fire Simulation
 
+> **Note:**  
+> **Currently, the simulation and 3D visualization are only fully supported on Linux.**  
+> (macOS and Windows support are planned but not yet implemented.)
+
+
 A scalable, cross-language, probabilistic wildfire simulation engine for research, visualization, and experimentation.
 
 ---
@@ -8,12 +13,16 @@ A scalable, cross-language, probabilistic wildfire simulation engine for researc
 
 **Requirements:**
 
-* **Rust** ([Install Rust](https://www.rust-lang.org/tools/install))
-* **Scala** with **SBT**
 
+* **Rust** ([Install Rust](https://www.rust-lang.org/tools/install))
+  * [Bevy](https://bevyengine.org/)
+* **Scala** with **SBT**
   * Java Development Kit (JDK) 8+
-  * [Install SBT](https://www.scala-sbt.org/download.html)
+  * [SBT](https://www.scala-sbt.org/download.html)
+  * [Coursier](https://get-coursier.io/docs/cli-installation)
 * **Python 3** (for data visualization, optional)
+
+---
 
 ### 1. Clone the repository
 
